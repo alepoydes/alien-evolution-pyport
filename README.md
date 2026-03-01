@@ -1,6 +1,12 @@
 # Alien Evolution (ZX Spectrum) -> Modern Python Port
 
-`Alien Evolution` is a classic 1987 isometric action game in which CYBORG G4 fights an alien population that keeps evolving into stronger forms.
+`Alien Evolution` is an isometric action game released in 1987 for the Sinclair ZX Spectrum.
+You play as CYBORG G4, sent to contain an alien outbreak after a nuclear disaster.
+The key mechanic is simple and tense: if you leave aliens alive for too long, they evolve into more dangerous forms and can eventually lay eggs.
+So this is not just a shooting game, it is about target priority and crowd control.
+
+This repository contains a Python/Pyxel port focused on fidelity to the original game while making it easier to run and inspect on modern machines.
+It includes headless stepping, deterministic replay, and runtime state save/load for testing and automation.
 
 <table>
   <tr>
@@ -9,12 +15,40 @@
   </tr>
 </table>
 
+## About The Original Game
+
+`Alien Evolution` was published by Gremlin Graphics Software Ltd in 1987.
+It was created by Marco Paulo Carrasco and Rui Manuel Tito, two young developers from Portugal.
+The game was well received at the time and got coverage in magazines such as Crash, Your Sinclair, ASM, and MicroHobby.
+
+Why it still matters:
+- The design is compact but interesting: a few rules interact to create pressure.
+- The original program is small enough to reverse engineer in detail.
+- It is a good candidate for software archaeology and for preserving 8-bit design techniques.
+
+Historical references:
+- World of Spectrum entry (release data, credits, archive): https://worldofspectrum.org/archive/software/games/alien-evolution-gremlin-graphics-software-ltd
+- Nelson Zagalo (2015), Video Games Around the World (Portugal): https://www.researchgate.net/figure/Paradise-Cafe-1985-top-left-Alien-Evolution-1987-top-right-Portugal-1111_fig1_323255356
+- Review aggregation with source magazines/issues: https://www.uvlist.net/game-11914-Alien%2BEvolution
+
 ## Project Goals
 
-- Preserve a historically important game in a form that is easy to run and inspect on modern hardware.
-- Perform reverse engineering to recover implementation methods used in the original ZX version.
-- Document the game loop and runtime behavior for education and long-term maintainability.
-- Provide a practical scriptable environment for automation, bot development, and ML experiments.
+- Preserve a historically interesting game in a form that runs well on modern hardware.
+- Reconstruct the original behavior with evidence-based reverse engineering.
+- Document runtime logic and data flow so the project is maintainable.
+- Provide practical tooling for automation, bots, and machine learning experiments.
+
+## Why It Is Useful For ML
+
+8-bit games are a good middle ground: fast and deterministic, but still non-trivial.
+`Alien Evolution` is especially useful because delayed consequences are built into the core loop.
+If an agent ignores threats now, difficulty spikes later due to evolution and reproduction.
+
+This makes the game useful for:
+- delayed credit assignment experiments,
+- policy testing under controllable difficulty,
+- deterministic rollouts and regression checks from saved inputs/states,
+- comparing pixel-only policies with structured observations.
 
 ## Quick Start (Interactive)
 
@@ -34,10 +68,10 @@ Quality-of-life hotkeys:
 - `F8`: rollback
 - `F7`: manual checkpoint
 
-## CLI and Automation Docs
+## CLI And Automation Docs
 
-- For headless CLI usage, JSONL telemetry, FMF recording/playback, RZX input, state I/O, and reusable ZX -> Python/Pyxel porting infrastructure, see [PORTING_GUIDE.md](PORTING_GUIDE.md).
-- For bot development and ML-oriented workflows, see [AI.md](AI.md).
+- Headless CLI usage, JSONL telemetry, FMF recording/playback, RZX input, and state I/O: [PORTING_GUIDE.md](PORTING_GUIDE.md)
+- Bot and ML workflows: [AI.md](AI.md)
 
 ## Documentation Guide
 
