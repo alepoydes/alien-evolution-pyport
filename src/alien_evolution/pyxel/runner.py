@@ -175,7 +175,22 @@ def run_pyxel_game(
         screen_messages.push(text, host_frame_index=host_frame_index)
 
     def _handle_state_hotkeys() -> None:
-        nonlocal pending_delay_frames
+        nonlocal pending_delay_frames, history
+        if hasattr(pyxel, "KEY_F10") and pyxel.btnp(pyxel.KEY_F10):
+            try:
+                runtime.reset()
+                pending_delay_frames = 0
+                _refresh_snapshot_output()
+                if stateful_runtime is not None and history_interval_host_frames > 0:
+                    history = RuntimeStateHistory(
+                        interval_host_frames=history_interval_host_frames,
+                        max_checkpoints=history_max_checkpoints,
+                    )
+                    history.force_capture(stateful_runtime, host_frame_index=host_frame_index)
+                _push_screen_message("Reset done")
+            except Exception as exc:  # pragma: no cover - runtime/UI error path
+                _log_state_error("reset", exc)
+                _push_screen_message("Reset failed")
         if stateful_runtime is None:
             return
         if hasattr(pyxel, "KEY_F5") and pyxel.btnp(pyxel.KEY_F5):
