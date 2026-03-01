@@ -1,0 +1,37 @@
+[build-system]
+requires = ["hatchling>=1.21"]
+build-backend = "hatchling.build"
+
+[project]
+name = "alien-evolution-pyxel-port"
+version = "0.1.0"
+description = "Scaffold for a pixel-perfect ZX Spectrum Alien Evolution logic port on Pyxel"
+readme = "README.md"
+requires-python = ">=3.10"
+authors = [{ name = "Alien Evolution port scaffold" }]
+license = { text = "MIT" }
+keywords = ["zx-spectrum", "pyxel", "retro", "port"]
+
+dependencies = [
+  "pyxel>=1.9.11",
+]
+
+[project.urls]
+Pyxel = "https://github.com/kitao/pyxel"
+
+[project.scripts]
+demoline = "alien_evolution.pyxel.demoline:main"
+demoline-cli = "alien_evolution.fileio.demoline:main"
+alienevolution = "alien_evolution.pyxel.alienevolution:main"
+alienevolution-cli = "alien_evolution.fileio.alienevolution:main"
+fmf-player = "alien_evolution.pyxel.fmfplayer:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/alien_evolution"]
+include = ["src/alien_evolution/data/**"]
+
+[tool.hatch.build.targets.sdist]
+include = [
+  "src/alien_evolution/data/**",
+  "tools/export_skool_blocks.py",
+]
