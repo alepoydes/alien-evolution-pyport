@@ -92,6 +92,8 @@ def _audio_to_dict(cmd: AudioCommand) -> dict[str, object]:
         "duration_s": cmd.duration_s,
         "volume": cmd.volume,
         "channel": cmd.channel,
+        "source": cmd.source,
+        "start_delay_ticks": cmd.start_delay_ticks,
     }
 
 

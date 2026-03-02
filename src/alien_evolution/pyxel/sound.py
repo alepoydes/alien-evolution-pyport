@@ -1,27 +1,36 @@
 from __future__ import annotations
 
 import math
+from dataclasses import dataclass
 from collections import deque
-from collections.abc import Iterable, Sequence
+from collections.abc import Sequence
 
 from ..zx.runtime import AudioCommand
 
 _AUDIO_TONES = ("S", "T", "P", "N")
+_A2_REFERENCE_HZ = 429.89
+
+
+@dataclass(slots=True)
+class _QueuedAudioCommand:
+    cmd: AudioCommand
+    ticks: int
+    is_rest: bool = False
 
 
 def _note_from_hz(freq: float) -> str:
     if freq <= 0:
         return "R"
 
-    midi = int(round(69 + 12.0 * math.log2(freq / 440.0)))
+    # Pyxel note numbers are 0..59 => C0..B4, anchored to project-tuned A2.
+    note_idx = int(round(33 + 12.0 * math.log2(freq / _A2_REFERENCE_HZ)))
+    if note_idx < 0:
+        note_idx = 0
+    if note_idx > 59:
+        note_idx = 59
     names = ("C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B")
-    name = names[midi % 12]
-
-    octv = (midi // 12) - 3
-    if octv < 0:
-        octv = 0
-    if octv > 4:
-        octv = 4
+    name = names[note_idx % 12]
+    octv = note_idx // 12
     return f"{name}{octv}"
 
 
@@ -44,6 +53,8 @@ def _normalized_command(cmd: AudioCommand) -> AudioCommand | None:
 
     volume = max(0, min(7, int(cmd.volume)))
     channel = max(0, min(3, int(cmd.channel)))
+    source = str(cmd.source or "generic")
+    start_delay_ticks = max(0, int(cmd.start_delay_ticks))
 
     return AudioCommand(
         tone=tone,
@@ -51,48 +62,36 @@ def _normalized_command(cmd: AudioCommand) -> AudioCommand | None:
         duration_s=duration,
         volume=volume,
         channel=channel,
+        source=source,
+        start_delay_ticks=start_delay_ticks,
     )
 
 
-def _normalize_and_merge(commands: Iterable[AudioCommand]) -> list[AudioCommand]:
-    merged: list[AudioCommand] = []
-    for raw in commands:
-        cmd = _normalized_command(raw)
-        if cmd is None:
-            continue
-        if merged:
-            last = merged[-1]
-            if (
-                last.tone == cmd.tone
-                and last.volume == cmd.volume
-                and last.channel == cmd.channel
-                and abs(last.freq_hz - cmd.freq_hz) < 1e-6
-            ):
-                merged[-1] = AudioCommand(
-                    tone=last.tone,
-                    freq_hz=last.freq_hz,
-                    duration_s=last.duration_s + cmd.duration_s,
-                    volume=last.volume,
-                    channel=last.channel,
-                )
-                continue
-        merged.append(cmd)
-    return merged
-
-
-def _sound_set_from_command(slot: int, cmd: AudioCommand, *, speed_ticks: int | None = None) -> None:
+def _sound_set_from_command(
+    slot: int,
+    cmd: AudioCommand,
+    *,
+    speed_ticks: int | None = None,
+    rest: bool = False,
+) -> None:
     import pyxel
 
-    note = _note_from_hz(cmd.freq_hz)
     ticks = max(1, int(speed_ticks) if speed_ticks is not None else int(round(cmd.duration_s * 120.0)))
     speed = ticks
 
-    notes = note
-    tones = cmd.tone
-    volumes = str(cmd.volume)
-    # For very short one-tick blips, a tiny fade helps avoid hard clicks and also
-    # subjectively matches the "pip" character of Spectrum beeper output.
-    effects = "F" if ticks <= 2 else "N"
+    if rest:
+        notes = "R"
+        tones = "N"
+        volumes = "0"
+        effects = "N"
+    else:
+        note = _note_from_hz(cmd.freq_hz)
+        notes = note
+        tones = cmd.tone
+        volumes = str(cmd.volume)
+        # For very short one-tick blips, a tiny fade helps avoid hard clicks and also
+        # subjectively matches the "pip" character of Spectrum beeper output.
+        effects = "F" if ticks <= 2 else "N"
 
     pyxel.sounds[slot].set(
         notes=notes,
@@ -146,7 +145,7 @@ class PyxelAudioPlayer:
         self._slots_per_channel = int(slots_per_channel)
         self._channel_gain = max(0.0, float(channel_gain))
         self._configured = False
-        self._queues: tuple[deque[AudioCommand], ...] = (
+        self._queues: tuple[deque[_QueuedAudioCommand], ...] = (
             deque(),
             deque(),
             deque(),
@@ -154,6 +153,38 @@ class PyxelAudioPlayer:
         )
         self._slot_cursor = [0, 0, 0, 0]
         self._tick_remainder = [0.0, 0.0, 0.0, 0.0]
+
+    @staticmethod
+    def _round_positive_with_remainder(raw_value: float) -> tuple[int, float]:
+        rounded = int(math.floor(raw_value + 0.5))
+        if rounded < 1:
+            return 1, 0.0
+        return rounded, raw_value - float(rounded)
+
+    @staticmethod
+    def _commands_match_for_merge(left: AudioCommand, right: AudioCommand) -> bool:
+        if left.start_delay_ticks != 0 or right.start_delay_ticks != 0:
+            return False
+        if left.source == "stream_music" and right.source == "stream_music":
+            return (
+                left.tone == right.tone
+                and left.channel == right.channel
+                and _note_from_hz(left.freq_hz) == _note_from_hz(right.freq_hz)
+            )
+        return (
+            left.tone == right.tone
+            and left.volume == right.volume
+            and left.channel == right.channel
+            and left.source == right.source
+            and abs(left.freq_hz - right.freq_hz) < 1e-6
+        )
+
+    def _quantize_duration_to_ticks(self, cmd: AudioCommand) -> int:
+        channel = cmd.channel
+        raw_ticks = (cmd.duration_s * 120.0) + self._tick_remainder[channel]
+        ticks, tick_remainder = self._round_positive_with_remainder(raw_ticks)
+        self._tick_remainder[channel] = tick_remainder
+        return ticks
 
     def _ensure_configured(self) -> None:
         if self._configured:
@@ -172,9 +203,55 @@ class PyxelAudioPlayer:
         self._configured = True
 
     def submit(self, commands: Sequence[AudioCommand]) -> None:
-        normalized = _normalize_and_merge(commands)
-        for cmd in normalized:
-            self._queues[cmd.channel].append(cmd)
+        for raw in commands:
+            cmd = _normalized_command(raw)
+            if cmd is None:
+                continue
+            ticks = self._quantize_duration_to_ticks(cmd)
+            delay_ticks = max(0, int(cmd.start_delay_ticks))
+            queue = self._queues[cmd.channel]
+            if delay_ticks > 0:
+                if queue and queue[-1].is_rest:
+                    queue[-1].ticks += delay_ticks
+                else:
+                    queue.append(
+                        _QueuedAudioCommand(
+                            cmd=AudioCommand(
+                                tone="N",
+                                freq_hz=20.0,
+                                duration_s=float(delay_ticks) / 120.0,
+                                volume=0,
+                                channel=cmd.channel,
+                                source=cmd.source,
+                            ),
+                            ticks=delay_ticks,
+                            is_rest=True,
+                        )
+                    )
+                cmd = AudioCommand(
+                    tone=cmd.tone,
+                    freq_hz=cmd.freq_hz,
+                    duration_s=cmd.duration_s,
+                    volume=cmd.volume,
+                    channel=cmd.channel,
+                    source=cmd.source,
+                    start_delay_ticks=0,
+                )
+            if queue and (not queue[-1].is_rest) and self._commands_match_for_merge(queue[-1].cmd, cmd):
+                merged = queue[-1]
+                merged.ticks += ticks
+                if merged.cmd.source == "stream_music" and cmd.source == "stream_music":
+                    merged.cmd = AudioCommand(
+                        tone=merged.cmd.tone,
+                        freq_hz=merged.cmd.freq_hz,
+                        duration_s=merged.cmd.duration_s + cmd.duration_s,
+                        volume=max(merged.cmd.volume, cmd.volume),
+                        channel=merged.cmd.channel,
+                        source=merged.cmd.source,
+                        start_delay_ticks=merged.cmd.start_delay_ticks,
+                    )
+            else:
+                queue.append(_QueuedAudioCommand(cmd=cmd, ticks=ticks))
 
     def update(self) -> None:
         import pyxel
@@ -193,23 +270,14 @@ class PyxelAudioPlayer:
                 if len(slots) >= self._slots_per_channel:
                     break
 
-                cmd = self._queues[channel].popleft()
-                # Pyxel's timebase is 120 ticks per second. Converting float durations
-                # to integer ticks by naive rounding produces noticeable jitter on short
-                # notes. We keep a per-channel fractional remainder and do a simple
-                # error-diffusion rounding so that timing stays stable over time.
-                raw_ticks = (cmd.duration_s * 120.0) + self._tick_remainder[channel]
-                ticks = int(math.floor(raw_ticks + 0.5))
-                if ticks < 1:
-                    ticks = 1
-                    self._tick_remainder[channel] = 0.0
-                else:
-                    self._tick_remainder[channel] = raw_ticks - float(ticks)
+                queued = self._queues[channel].popleft()
+                cmd = queued.cmd
+                ticks = queued.ticks
 
                 slot = slot_base + self._slot_cursor[channel]
                 self._slot_cursor[channel] = (self._slot_cursor[channel] + 1) % self._slots_per_channel
 
-                _sound_set_from_command(slot, cmd, speed_ticks=ticks)
+                _sound_set_from_command(slot, cmd, speed_ticks=ticks, rest=queued.is_rest)
                 slots.append(slot)
 
             if not slots:

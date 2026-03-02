@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 from typing import Any, Callable, Literal
 
@@ -176,6 +177,8 @@ class AlienEvolutionPort(StatefulManifestRuntime, AlienEvolutionData, ZXSpectrum
         "_interrupts_enabled",
         "_level_complete_roll_audio_frame_sync",
         "_rom_last_key_scan",
+        "_stream_pending_delay_ticks",
+        "_stream_slot_tick_remainder",
         "_z80_r_register",
         "border_color",
         "const_define_keys_descriptor_table",
@@ -486,6 +489,8 @@ class AlienEvolutionPort(StatefulManifestRuntime, AlienEvolutionData, ZXSpectrum
         self._fsm_step_active = False
         self._rom_last_key_scan: tuple[int, int] | None = None
         self._level_complete_roll_audio_frame_sync = False
+        self._stream_pending_delay_ticks = [0, 0]
+        self._stream_slot_tick_remainder = 0.0
 
     def reset(self) -> None:
         # Rebuild full runtime state from a fresh baseline instance.
@@ -820,6 +825,21 @@ class AlienEvolutionPort(StatefulManifestRuntime, AlienEvolutionData, ZXSpectrum
     def _fsm_state_boot_entry(self) -> tuple[str, int | None]:
         return FSM_STATE_MENU_INIT, None
 
+    def _reset_stream_audio_timing_state(self) -> None:
+        self._stream_pending_delay_ticks[0] = 0
+        self._stream_pending_delay_ticks[1] = 0
+        self._stream_slot_tick_remainder = 0.0
+
+    def _quantize_stream_slot_ticks(self, duration_s: float) -> int:
+        raw_ticks = (float(duration_s) * 120.0) + float(self._stream_slot_tick_remainder)
+        rounded = int(math.floor(raw_ticks + 0.5))
+        if rounded < 1:
+            rounded = 1
+            self._stream_slot_tick_remainder = 0.0
+            return rounded
+        self._stream_slot_tick_remainder = raw_ticks - float(rounded)
+        return rounded
+
     def _fsm_start_stream(
         self,
         *,
@@ -834,6 +854,7 @@ class AlienEvolutionPort(StatefulManifestRuntime, AlienEvolutionData, ZXSpectrum
         self._stream_ptr_b = stream_a.add(0x0001)
         self._stream_ptr_c = stream_b
         self._stream_ptr_d = stream_b.add(0x0001)
+        self._reset_stream_audio_timing_state()
         self._fsm_stream_ctx = {
             "abort_on_keypress": bool(abort_on_keypress),
             "timing_debt": 0,
@@ -850,6 +871,7 @@ class AlienEvolutionPort(StatefulManifestRuntime, AlienEvolutionData, ZXSpectrum
         if not isinstance(ctx["return_state"], str):
             raise RuntimeError("FSM stream finish requires string return_state")
         return_state = ctx["return_state"]
+        self._reset_stream_audio_timing_state()
         self._interrupts_enabled = True
         self._fsm_stream_ctx = {}
         return return_state
@@ -5741,6 +5763,7 @@ class AlienEvolutionPort(StatefulManifestRuntime, AlienEvolutionData, ZXSpectrum
         self._stream_ptr_b = ptr_a.add(0x0001)
         self._stream_ptr_c = ptr_b
         self._stream_ptr_d = ptr_b.add(0x0001)
+        self._reset_stream_audio_timing_state()
 
         self._interrupts_enabled = False
         try:
@@ -5760,6 +5783,7 @@ class AlienEvolutionPort(StatefulManifestRuntime, AlienEvolutionData, ZXSpectrum
                 timing_debt -= STREAM_ENGINE_FRAME_BUDGET
                 self._yield_frame()
         finally:
+            self._reset_stream_audio_timing_state()
             self._interrupts_enabled = True
 
     def fn_stream_byte_fetch_helper(self, stream_slot: StreamSlot) -> int:
@@ -5939,6 +5963,8 @@ class AlienEvolutionPort(StatefulManifestRuntime, AlienEvolutionData, ZXSpectrum
         total_duration_s = float(total_clock_units) / 3_500_000.0
         if total_duration_s <= 0.0:
             return 0
+        slot_ticks = self._quantize_stream_slot_ticks(total_duration_s)
+        slot_duration_s = float(slot_ticks) / 120.0
 
         # Stream dividers toggle the beeper latch bit; one tone period needs two toggles.
         #
@@ -5962,8 +5988,13 @@ class AlienEvolutionPort(StatefulManifestRuntime, AlienEvolutionData, ZXSpectrum
         slow_is_carrier = slow_wraps > 0 and freq_slow > carrier_cutoff_hz
         fast_audible = fast_wraps > 0 and not fast_is_carrier
         slow_audible = slow_wraps > 0 and not slow_is_carrier
+        audible_by_channel = (fast_audible, slow_audible)
 
         both_voices = fast_audible and slow_audible
+
+        for channel, is_audible in enumerate(audible_by_channel):
+            if not is_audible:
+                self._stream_pending_delay_ticks[channel] += slot_ticks
 
         if fast_audible:
             # When the other divider is a carrier, the XOR-mixed beeper output feels closer
@@ -5972,19 +6003,25 @@ class AlienEvolutionPort(StatefulManifestRuntime, AlienEvolutionData, ZXSpectrum
             self.emit_audio(
                 tone="S",
                 freq_hz=freq_fast,
-                duration_s=total_duration_s,
+                duration_s=slot_duration_s,
                 volume=volume,
                 channel=0,
+                source="stream_music",
+                start_delay_ticks=self._stream_pending_delay_ticks[0],
             )
+            self._stream_pending_delay_ticks[0] = 0
         if slow_audible:
             volume = 4 if both_voices else (6 if fast_is_carrier else 5)
             self.emit_audio(
                 tone="S",
                 freq_hz=freq_slow,
-                duration_s=total_duration_s,
+                duration_s=slot_duration_s,
                 volume=volume,
                 channel=1,
+                source="stream_music",
+                start_delay_ticks=self._stream_pending_delay_ticks[1],
             )
+            self._stream_pending_delay_ticks[1] = 0
         return int(total_clock_units)
 
     # ZX 0xFC82..0xFC9F

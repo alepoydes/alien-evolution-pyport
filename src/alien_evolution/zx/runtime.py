@@ -28,6 +28,8 @@ class AudioCommand:
     duration_s: float
     volume: int = 7
     channel: int = 0
+    source: str = "generic"
+    start_delay_ticks: int = 0
 
     def __post_init__(self) -> None:
         tone_u = (self.tone or "S").upper()
@@ -35,6 +37,12 @@ class AudioCommand:
             tone_u = "S"
         if tone_u != self.tone:
             object.__setattr__(self, "tone", tone_u)
+        source_s = str(self.source or "generic")
+        if source_s != self.source:
+            object.__setattr__(self, "source", source_s)
+        start_delay = max(0, int(self.start_delay_ticks))
+        if start_delay != self.start_delay_ticks:
+            object.__setattr__(self, "start_delay_ticks", start_delay)
 
 
 @dataclass(frozen=True, slots=True)
@@ -237,6 +245,8 @@ class ZXSpectrumServiceLayer:
         duration_s: float,
         volume: int,
         channel: int = 0,
+        source: str = "generic",
+        start_delay_ticks: int = 0,
     ) -> None:
         tone_u = (tone or "S").upper()
         if tone_u not in ("S", "T", "P", "N"):
@@ -245,13 +255,16 @@ class ZXSpectrumServiceLayer:
         duration = float(duration_s)
         vol = max(0, min(7, int(volume)))
         ch_i = max(0, min(3, int(channel)))
+        source_s = str(source or "generic")
+        delay_ticks = max(0, int(start_delay_ticks))
 
-        if self._audio_commands:
+        if self._audio_commands and delay_ticks == 0:
             last = self._audio_commands[-1]
             if (
                 last.tone == tone_u
                 and last.volume == vol
                 and last.channel == ch_i
+                and last.source == source_s
                 and abs(last.freq_hz - freq) < 1e-6
             ):
                 self._audio_commands[-1] = AudioCommand(
@@ -260,6 +273,8 @@ class ZXSpectrumServiceLayer:
                     duration_s=last.duration_s + duration,
                     volume=vol,
                     channel=ch_i,
+                    source=source_s,
+                    start_delay_ticks=last.start_delay_ticks,
                 )
                 return
 
@@ -270,5 +285,7 @@ class ZXSpectrumServiceLayer:
                 duration_s=duration,
                 volume=vol,
                 channel=ch_i,
+                source=source_s,
+                start_delay_ticks=delay_ticks,
             )
         )
