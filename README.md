@@ -4,16 +4,20 @@
 
 This repository is a modern **Python/Pyxel** port of the original ZX game. The aim is fidelity first: behaviour, timing, and presentation that match the 8-bit version as closely as we can justify, while also making the program easier to run, inspect, and experiment with (including headless stepping, deterministic replay from recorded inputs, and state snapshots for reproducible resets).
 
-> Disclaimer: reverse-engineering games like this usually takes significant time. This port was built as a weekend project, which was possible thanks to ChatGPT-assisted analysis and implementation.
->
-> This project also relied heavily on [SkoolKit](https://github.com/skoolkid/skoolkit) and [Fuse (the Free Unix Spectrum Emulator)](https://fuse-emulator.sourceforge.net/) for source-level analysis, and on [Pyxel](https://github.com/kitao/pyxel) for implementing the remake. Many thanks to these projects and their maintainers, they made this work substantially easier.
+## Play Online
+
+- [Play Alien Evolution in your browser](https://alepoydes.github.io/alien-evolution-pyport/alien-evolution.html) (`W/A/S/D` move, `Space` fire, `Enter` switch weapon)
 
 <table>
   <tr>
-    <td><img src="https://worldofspectrum.org//scr2gif?file=pub/sinclair/screens/load/a/scr/AlienEvolution.scr" alt="Alien Evolution loading screen" width="420"></td>
-    <td><img src="figs/alien_evolution_gameplay_screenshot.png" alt="Alien Evolution gameplay screenshot" width="420"></td>
+    <td><img src="figs/gameplay-level-1.png" alt="Alien Evolution gameplay level 1" width="420"></td>
+    <td><img src="figs/gameplay-level-2.png" alt="Alien Evolution gameplay level 2" width="420"></td>
   </tr>
 </table>
+
+> Disclaimer: reverse-engineering games like this usually takes significant time. This port was built as a weekend project, which was possible thanks to ChatGPT-assisted analysis and implementation.
+>
+> This project also relied heavily on [SkoolKit](https://github.com/skoolkid/skoolkit) and [Fuse (the Free Unix Spectrum Emulator)](https://fuse-emulator.sourceforge.net/) for source-level analysis, and on [Pyxel](https://github.com/kitao/pyxel) for implementing the remake. Many thanks to these projects and their maintainers, they made this work substantially easier.
 
 ## Alien Evolution in its 1987 context
 
