@@ -5906,11 +5906,36 @@ class AlienEvolutionPort(StatefulManifestRuntime, AlienEvolutionData, ZXSpectrum
 
         # FC51<->FC70 inner loop is cycle-shaped in ASM; use Z80 clock units directly
         # instead of treating loop iterations as arbitrary 22.05kHz samples.
-        # Base non-wrap iteration cost is 88 units. Every B-wrap iteration adds
-        # +9 units, and the final C-wrap exit contributes RET (+10).
+        #
+        # IMPORTANT DETAIL (root cause of the "music is too high / tempo drifts" bug):
+        #
+        # The Python port counts `iterations` as the number of times we execute the
+        # FC53..FC7B / FC53..FC65 body (the part that includes the DJNZ). In the real
+        # Z80 code, the *common* path after DJNZ is a jump back to FC51, and FC51/FC52
+        # are two NOPs used purely as timing padding before execution continues at FC53.
+        #
+        # In other words: the steady-state cost between successive FC53 bodies is not
+        # 88 t-states, but 88 + 8 = 96 t-states for most iterations. The exception is
+        # the iteration immediately following a B-wrap, because the code goes through
+        # INC C / JP NZ,FC53 and deliberately *skips* FC51/FC52.
+        #
+        # If we forget those two NOPs, we underestimate the duration by ~9% for the
+        # menu streams (4608 iterations), which makes every note ~9% sharper and the
+        # whole piece ~9% faster.
         iter_count = int(iterations)
         b_wraps = iter_count // 0x100
-        total_clock_units = (88 * iter_count) + (9 * b_wraps) + 10
+
+        # Count how many times the loop actually passes through FC51/FC52.
+        #
+        # After each B-wrap, the next iteration starts at FC53 (JP NZ,FC53), so those
+        # two NOPs are skipped once per wrap — except for the final wrap that exits the
+        # loop (no next iteration).
+        starts_via_fc53 = b_wraps
+        if b_wraps > 0 and (iter_count & 0xFF) == 0:
+            starts_via_fc53 -= 1
+        fc51_starts = max(0, iter_count - starts_via_fc53)
+
+        total_clock_units = (88 * iter_count) + (8 * fc51_starts) + (9 * b_wraps) + 10
         total_duration_s = float(total_clock_units) / 3_500_000.0
         if total_duration_s <= 0.0:
             return 0
