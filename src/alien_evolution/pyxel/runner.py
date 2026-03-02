@@ -161,6 +161,7 @@ def run_pyxel_game(
             audio_commands=(),
             border_color=0,
         )
+    redraw_required = True
 
     def _refresh_snapshot_output() -> None:
         nonlocal last_output
@@ -172,15 +173,18 @@ def run_pyxel_game(
         print(f"{type(runtime).__name__} {action} failed: {exc}", file=sys.stderr)
 
     def _push_screen_message(text: str) -> None:
+        nonlocal redraw_required
         screen_messages.push(text, host_frame_index=host_frame_index)
+        redraw_required = True
 
     def _handle_state_hotkeys() -> None:
-        nonlocal pending_delay_frames, history
+        nonlocal pending_delay_frames, history, redraw_required
         if hasattr(pyxel, "KEY_F10") and pyxel.btnp(pyxel.KEY_F10):
             try:
                 runtime.reset()
                 pending_delay_frames = 0
                 _refresh_snapshot_output()
+                redraw_required = True
                 if stateful_runtime is not None and history_interval_host_frames > 0:
                     history = RuntimeStateHistory(
                         interval_host_frames=history_interval_host_frames,
@@ -206,6 +210,7 @@ def run_pyxel_game(
                 stateful_runtime.load_state(envelope)
                 pending_delay_frames = 0
                 _refresh_snapshot_output()
+                redraw_required = True
                 if history is not None:
                     history.force_capture(stateful_runtime, host_frame_index=host_frame_index)
                 _push_screen_message("Quick-load done")
@@ -220,6 +225,7 @@ def run_pyxel_game(
                 if history.rollback(stateful_runtime, steps=1):
                     pending_delay_frames = 0
                     _refresh_snapshot_output()
+                    redraw_required = True
                     _push_screen_message("Rollback done")
                 else:
                     _push_screen_message("Rollback unavailable")
@@ -250,21 +256,32 @@ def run_pyxel_game(
         )
 
     def _update() -> None:
-        nonlocal host_frame_index, last_output, pending_delay_frames
+        nonlocal host_frame_index, last_output, pending_delay_frames, redraw_required
         host_frame_index += 1
+        messages_before = tuple(screen_messages.messages)
         _handle_state_hotkeys()
         screen_messages.prune(host_frame_index=host_frame_index)
+        if tuple(screen_messages.messages) != messages_before:
+            redraw_required = True
 
         if pending_delay_frames > 0:
+            prev_flash_phase = int(last_output.flash_phase) & 0x01
+            prev_border_color = int(last_output.border_color) & 0x07
             _advance_runtime_host_frame()
             pending_delay_frames -= 1
             _refresh_snapshot_output()
+            if (
+                ((int(last_output.flash_phase) & 0x01) != prev_flash_phase)
+                or ((int(last_output.border_color) & 0x07) != prev_border_color)
+            ):
+                redraw_required = True
             audio_player.update()
             if history is not None and stateful_runtime is not None:
                 history.maybe_capture(stateful_runtime, host_frame_index=host_frame_index)
             return
 
         last_output = runtime.step(read_frame_input())
+        redraw_required = True
         pending_delay_frames = max(0, int(last_output.timing.delay_after_step_frames))
         audio_player.submit(last_output.audio_commands)
         audio_player.update()
@@ -272,6 +289,9 @@ def run_pyxel_game(
             history.maybe_capture(stateful_runtime, host_frame_index=host_frame_index)
 
     def _draw() -> None:
+        nonlocal redraw_required
+        if not redraw_required:
+            return
         blit_zx_screen_to_pyxel(
             last_output.screen_bitmap,
             last_output.screen_attrs,
@@ -286,6 +306,7 @@ def run_pyxel_game(
         row_height = 8
         for idx, message in enumerate(screen_messages.messages):
             pyxel.text(text_x, text_y + idx * row_height, message, 10)
+        redraw_required = False
 
     pyxel.init(width, height, title=title, fps=fps, display_scale=display_scale)
     apply_zx_palette()
