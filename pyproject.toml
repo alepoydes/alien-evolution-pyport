@@ -20,9 +20,9 @@ dependencies = [
 Pyxel = "https://github.com/kitao/pyxel"
 
 [project.scripts]
-demoline = "alien_evolution.pyxel.demoline:main"
+demoline = "alien_evolution.demoline.run:main"
 demoline-cli = "alien_evolution.fileio.demoline:main"
-alienevolution = "alien_evolution.pyxel.alienevolution:main"
+alienevolution = "alien_evolution.alienevolution.run:main"
 alienevolution-cli = "alien_evolution.fileio.alienevolution:main"
 fmf-player = "alien_evolution.pyxel.fmfplayer:main"
 
