@@ -31,6 +31,12 @@ uv run demoline
 uv run --with pytest pytest tests -q
 ```
 
+### Build a source archive from repository
+
+```bash
+git archive --format=tar.gz --prefix=alien-evolution/ --output alien-evolution-src.tar.gz HEAD
+```
+
 ## Build a `pyxapp` and HTML build
 
 Build artifacts with the helper script:
