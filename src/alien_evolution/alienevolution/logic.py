@@ -5915,28 +5915,49 @@ class AlienEvolutionPort(StatefulManifestRuntime, AlienEvolutionData, ZXSpectrum
         if total_duration_s <= 0.0:
             return 0
 
-        # Stream dividers toggle the latch bit; one tone period needs two toggles.
+        # Stream dividers toggle the beeper latch bit; one tone period needs two toggles.
+        #
+        # Porting nuance: the original engine mixes both dividers by toggling the *same*
+        # 1-bit latch (port 0xFE bit 4). When one divider is configured with an extremely
+        # small reload value (the common "1" case), it becomes an ultrasonic carrier.
+        # On real hardware that carrier is heavily attenuated by the speaker and ends up
+        # acting as a modulation source for the other divider, not as a separately heard
+        # pitched voice.
+        #
+        # If we naively map that carrier to Pyxel notes (which have a much lower practical
+        # ceiling), we get the failure mode reported during porting: low-register phrases
+        # are masked by a sharp high tone.
         freq_fast = float(fast_wraps) / (2.0 * total_duration_s) if fast_wraps > 0 else 0.0
         freq_slow = float(slow_wraps) / (2.0 * total_duration_s) if slow_wraps > 0 else 0.0
-        freq_fast = max(40.0, min(2200.0, freq_fast))
-        freq_slow = max(40.0, min(2200.0, freq_slow))
 
-        both_voices = fast_wraps > 0 and slow_wraps > 0
+        # Treat very high divider rates as a carrier/hiss component and avoid emitting them
+        # as pitched voices.
+        carrier_cutoff_hz = 3800.0
+        fast_is_carrier = fast_wraps > 0 and freq_fast > carrier_cutoff_hz
+        slow_is_carrier = slow_wraps > 0 and freq_slow > carrier_cutoff_hz
+        fast_audible = fast_wraps > 0 and not fast_is_carrier
+        slow_audible = slow_wraps > 0 and not slow_is_carrier
 
-        if fast_wraps > 0:
+        both_voices = fast_audible and slow_audible
+
+        if fast_audible:
+            # When the other divider is a carrier, the XOR-mixed beeper output feels closer
+            # to a single full-amplitude voice than to "half of a duet".
+            volume = 4 if both_voices else (6 if slow_is_carrier else 5)
             self.emit_audio(
                 tone="S",
                 freq_hz=freq_fast,
                 duration_s=total_duration_s,
-                volume=4 if both_voices else 5,
+                volume=volume,
                 channel=0,
             )
-        if slow_wraps > 0:
+        if slow_audible:
+            volume = 4 if both_voices else (6 if fast_is_carrier else 5)
             self.emit_audio(
                 tone="S",
                 freq_hz=freq_slow,
                 duration_s=total_duration_s,
-                volume=4 if both_voices else 5,
+                volume=volume,
                 channel=1,
             )
         return int(total_clock_units)

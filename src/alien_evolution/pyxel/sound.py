@@ -80,17 +80,19 @@ def _normalize_and_merge(commands: Iterable[AudioCommand]) -> list[AudioCommand]
     return merged
 
 
-def _sound_set_from_command(slot: int, cmd: AudioCommand) -> None:
+def _sound_set_from_command(slot: int, cmd: AudioCommand, *, speed_ticks: int | None = None) -> None:
     import pyxel
 
     note = _note_from_hz(cmd.freq_hz)
-    ticks = max(1, int(round(cmd.duration_s * 120.0)))
+    ticks = max(1, int(speed_ticks) if speed_ticks is not None else int(round(cmd.duration_s * 120.0)))
     speed = ticks
 
     notes = note
     tones = cmd.tone
     volumes = str(cmd.volume)
-    effects = "N"
+    # For very short one-tick blips, a tiny fade helps avoid hard clicks and also
+    # subjectively matches the "pip" character of Spectrum beeper output.
+    effects = "F" if ticks <= 2 else "N"
 
     pyxel.sounds[slot].set(
         notes=notes,
@@ -135,7 +137,7 @@ class PyxelAudioPlayer:
     def __init__(
         self,
         *,
-        slots_per_channel: int = 8,
+        slots_per_channel: int = 16,
         channel_gain: float = 1.0,
     ) -> None:
         if slots_per_channel <= 0:
@@ -151,11 +153,19 @@ class PyxelAudioPlayer:
             deque(),
         )
         self._slot_cursor = [0, 0, 0, 0]
+        self._tick_remainder = [0.0, 0.0, 0.0, 0.0]
 
     def _ensure_configured(self) -> None:
         if self._configured:
             return
         import pyxel
+
+        # Pyxel exposes a global pool of sound slots; keep our per-channel ring
+        # inside that pool even if the host runtime uses a smaller configuration.
+        max_slots_per_channel = max(1, len(pyxel.sounds) // 4)
+        if self._slots_per_channel > max_slots_per_channel:
+            self._slots_per_channel = max_slots_per_channel
+            self._slot_cursor = [c % self._slots_per_channel for c in self._slot_cursor]
 
         for channel in range(4):
             pyxel.channels[channel].gain = self._channel_gain
@@ -184,10 +194,22 @@ class PyxelAudioPlayer:
                     break
 
                 cmd = self._queues[channel].popleft()
+                # Pyxel's timebase is 120 ticks per second. Converting float durations
+                # to integer ticks by naive rounding produces noticeable jitter on short
+                # notes. We keep a per-channel fractional remainder and do a simple
+                # error-diffusion rounding so that timing stays stable over time.
+                raw_ticks = (cmd.duration_s * 120.0) + self._tick_remainder[channel]
+                ticks = int(math.floor(raw_ticks + 0.5))
+                if ticks < 1:
+                    ticks = 1
+                    self._tick_remainder[channel] = 0.0
+                else:
+                    self._tick_remainder[channel] = raw_ticks - float(ticks)
+
                 slot = slot_base + self._slot_cursor[channel]
                 self._slot_cursor[channel] = (self._slot_cursor[channel] + 1) % self._slots_per_channel
 
-                _sound_set_from_command(slot, cmd)
+                _sound_set_from_command(slot, cmd, speed_ticks=ticks)
                 slots.append(slot)
 
             if not slots:
