@@ -317,7 +317,7 @@ def run_pyxel_game(
             y=margin_y,
             border=last_output.border_color,
             flash_phase=last_output.flash_phase,
-            method="rect",
+            method="auto",
         )
         text_x = 4
         text_y = 4

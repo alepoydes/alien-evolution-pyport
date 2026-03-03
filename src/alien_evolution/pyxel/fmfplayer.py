@@ -94,7 +94,7 @@ def run_fmf_player(
             y=margin_y,
             border=0,
             flash_phase=(frame_index // 32) & 1,
-            method="rect",
+            method="auto",
         )
         pyxel.text(
             2,
