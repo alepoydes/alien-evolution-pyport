@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass
-from typing import Any, Callable, Literal
+from typing import Any, Callable, Literal, cast
 
 from .blocks import (
     AlienEvolutionData,
@@ -15,6 +15,9 @@ from .blocks import (
     RendererFillCounters,
     RuntimeObjectQueueBuffer,
     RuntimeObjectQueueEntry,
+    RENDERER_WORKSPACE_OFF_CELL_BLIT_WORK_BUFFER,
+    RENDERER_WORKSPACE_OFF_LINEAR_VIEWPORT_WORK_BUFFER,
+    RENDERER_WORKSPACE_OFF_VISIBLE_CELL_STAGING_LATTICE,
     TransientQueueBuffer,
     TransientQueueEntry,
     UIFrameParams,
@@ -30,7 +33,6 @@ from ..zx.state import (
     compute_schema_hash,
     StatefulManifestRuntime,
 )
-from ..zx.config import ENABLE_RUNTIME_CHECKS
 
 StreamSlot = Literal["stream_ptr_a", "stream_ptr_b", "stream_ptr_c", "stream_ptr_d"]
 
@@ -154,7 +156,7 @@ _STATE_DATACLASS_TYPES: dict[str, type] = {
 class AlienEvolutionPort(StatefulManifestRuntime, AlienEvolutionData, ZXSpectrumServiceLayer):
     """Runtime scaffold with routine stubs auto-seeded from Skool annotations."""
 
-    STATE_SCHEMA_VERSION: int = 3
+    STATE_SCHEMA_VERSION: int = 4
     _STATE_CODEC_VERSION: int = 1
     STATE_RUNTIME_ID_ALIASES: tuple[str, ...] = (
         "alien_evolution.logic.AlienEvolutionPort",
@@ -242,7 +244,6 @@ class AlienEvolutionPort(StatefulManifestRuntime, AlienEvolutionData, ZXSpectrum
         "var_active_map_mode",
         "var_active_sprite_subset_bank",
         "var_aux_padding_bytes",
-        "var_cell_blit_work_buffer",
         "var_current_map_coords",
         "var_display_attribute_ram",
         "var_display_bitmap_copy_tail_anchor_4001",
@@ -261,7 +262,6 @@ class AlienEvolutionPort(StatefulManifestRuntime, AlienEvolutionData, ZXSpectrum
         "var_level_map_mode_0",
         "var_level_map_mode_1",
         "var_level_map_mode_2",
-        "var_linear_viewport_work_buffer",
         "var_marker_counters",
         "var_marker_index_state",
         "var_menu_selection_index",
@@ -271,8 +271,8 @@ class AlienEvolutionPort(StatefulManifestRuntime, AlienEvolutionData, ZXSpectrum
         "var_queue_state_scratch",
         "var_queue_write_ptr_scratch",
         "var_render_stack_saved_sp",
-        "var_render_work_area_tail",
         "var_renderer_fill_counters",
+        "var_renderer_workspace",
         "var_rom_border_shadow_byte",
         "var_runtime_aux_c8_hi",
         "var_runtime_aux_c8_lo",
@@ -310,11 +310,7 @@ class AlienEvolutionPort(StatefulManifestRuntime, AlienEvolutionData, ZXSpectrum
         "var_transient_queue_a",
         "var_transient_queue_b",
         "var_transient_queue_c",
-        "var_visible_cell_staging_lattice",
-        "var_visible_cell_staging_mid_window",
         "var_visible_cell_staging_prelude",
-        "var_visible_cell_staging_prelude_bytes",
-        "var_visible_cell_staging_tail_window",
         "var_zx_system_workspace_ram",
     )
     _STATE_DYNAMIC_BLOCK_PTR_FIELDS: tuple[str, ...] = (
@@ -529,98 +525,6 @@ class AlienEvolutionPort(StatefulManifestRuntime, AlienEvolutionData, ZXSpectrum
     def tick(self, joy: int) -> StepOutput:
         return self.step(FrameInput(joy_kempston=joy))
 
-    def _resolve_mutable_ptr(self, ptr: BlockPtr) -> tuple[bytearray, int]:
-        ptr = self._normalize_workspace_ptr(ptr)
-        array, index = ptr.array, ptr.index
-        # In the fidelity/debug build we keep explicit mutability errors.
-        # In the fast path we let the underlying bytearray assignment raise.
-        if ENABLE_RUNTIME_CHECKS and not isinstance(array, bytearray):
-            raise TypeError(f"Pointer targets immutable block: {type(array)!r}")
-        return array, index  # type: ignore[return-value]
-
-    def _read_bytes(self, src: BlockPtr, size: int) -> bytes:
-        src = self._normalize_workspace_ptr(src)
-        array, index = src.array, src.index
-        self._check_span_bounds(array=array, index=index, size=size, op="read")
-        return bytes(array[index : index + size])
-
-    def _read_u8_ptr(self, ptr: BlockPtr) -> int:
-        ptr = self._normalize_workspace_ptr(ptr)
-        array, index = ptr.array, ptr.index
-        self._check_span_bounds(array=array, index=index, size=1, op="read")
-        return array[index]
-
-    def _read_u16_ptr(self, ptr: BlockPtr) -> int:
-        lo = self._read_u8_ptr(ptr)
-        hi = self._read_u8_ptr(ptr.add(0x0001))
-        return lo | (hi << 8)
-
-    def _write_u16_ptr(self, ptr: BlockPtr, value: int) -> None:
-        v = value & 0xFFFF
-        self._write_u8_ptr(ptr, v & 0xFF)
-        self._write_u8_ptr(ptr.add(0x0001), (v >> 8) & 0xFF)
-
-    def _write_u8_ptr(self, ptr: BlockPtr, value: int) -> None:
-        array, index = self._resolve_mutable_ptr(ptr)
-        self._check_span_bounds(array=array, index=index, size=1, op="write")
-        array[index] = value & 0xFF
-
-    def _as_u8(self, value_or_ptr: int | BlockPtr) -> int:
-        if isinstance(value_or_ptr, BlockPtr):
-            return self._read_u8_ptr(value_or_ptr) & 0xFF
-        if isinstance(value_or_ptr, int):
-            return value_or_ptr & 0xFF
-        raise TypeError(f"Expected int or BlockPtr, got {type(value_or_ptr)!r}")
-
-    @staticmethod
-    def _u16_to_signed(value: int) -> int:
-        v = int(value) & 0xFFFF
-        return v - 0x10000 if (v & 0x8000) else v
-
-    @staticmethod
-    def _check_span_bounds(*, array: bytes | bytearray, index: int, size: int, op: str) -> None:
-        if not ENABLE_RUNTIME_CHECKS:
-            return
-        if size < 0:
-            raise ValueError(f"Negative span for {op}: size={size}")
-        end = index + size
-        if index < 0 or end > len(array):
-            raise ValueError(
-                f"{op} crosses block boundary: index={index}, size={size}, len={len(array)}",
-            )
-
-    def _write_bytes_ptr(self, dst: BlockPtr, data: bytes | bytearray) -> None:
-        array, index = self._resolve_mutable_ptr(dst)
-        payload = bytes(data)
-        self._check_span_bounds(array=array, index=index, size=len(payload), op="write")
-        array[index : index + len(payload)] = payload
-
-    def _fill_bytes_ptr(self, dst: BlockPtr, size: int, value: int) -> None:
-        array, index = self._resolve_mutable_ptr(dst)
-        self._check_span_bounds(array=array, index=index, size=size, op="fill")
-        array[index : index + size] = bytes([value & 0xFF]) * size
-
-    def _ptr_add(self, ptr: BlockPtr, delta: int) -> BlockPtr:
-        return ptr.add(int(delta))
-
-    def _display_attr_ptr(self, abs_addr: int) -> BlockPtr:
-        index = int(abs_addr) - 0x5800
-        if index < 0 or index >= len(self.var_display_attribute_ram):
-            raise ValueError(f"Display attribute address out of range: 0x{int(abs_addr) & 0xFFFF:04X}")
-        return BlockPtr(self.var_display_attribute_ram, index)
-
-    def _active_sprite_patch_source_ptr(self) -> BlockPtr:
-        return BlockPtr(self.var_active_sprite_subset_bank, 0x0580)
-
-    def _linear_viewport_stack_fill_top_ptr(self) -> BlockPtr:
-        return BlockPtr(self.var_linear_viewport_work_buffer, 0x0F00)
-
-    def _visible_cell_staging_preset_row_ptr(self, row_index: int) -> BlockPtr:
-        idx = int(row_index)
-        if idx < 0 or idx >= len(_VISIBLE_CELL_STAGING_PRESET_ROW_OFFSETS):
-            raise ValueError(f"Preset row index out of range: {idx}")
-        return BlockPtr(self.var_visible_cell_staging_lattice, _VISIBLE_CELL_STAGING_PRESET_ROW_OFFSETS[idx])
-
     def _is_level_map_buffer(self, array: bytes | bytearray) -> bool:
         return (
             array is self.var_level_map_mode_0
@@ -638,6 +542,105 @@ class AlienEvolutionPort(StatefulManifestRuntime, AlienEvolutionData, ZXSpectrum
         row %= row_size
         return (row * row_size + col) & 0xFFFF
 
+    def _normalize_map_ptr(self, ptr: BlockPtr) -> BlockPtr:
+        if self._is_level_map_buffer(ptr.array):
+            return BlockPtr(ptr.array, self._wrap_level_index_periodic(ptr.index))
+        return ptr
+
+    def _read_bytes(self, src: BlockPtr, size: int) -> bytes:
+        src = self._normalize_map_ptr(src)
+        array, index = src.array, src.index
+        size_int = int(size)
+        if index < 0:
+            raise IndexError(index)
+        if size_int > 0:
+            # Force IndexError for out-of-range slices (including bytearray writes).
+            _ = array[index + size_int - 1]
+        return bytes(array[index : index + size_int])
+
+    def _read_u8_ptr(self, ptr: BlockPtr) -> int:
+        ptr = self._normalize_map_ptr(ptr)
+        if ptr.index < 0:
+            raise IndexError(ptr.index)
+        return ptr.array[ptr.index]
+
+    def _read_u16_ptr(self, ptr: BlockPtr) -> int:
+        lo = self._read_u8_ptr(ptr)
+        hi = self._read_u8_ptr(ptr.add(0x0001))
+        return lo | (hi << 8)
+
+    def _write_u16_ptr(self, ptr: BlockPtr, value: int) -> None:
+        v = value & 0xFFFF
+        self._write_u8_ptr(ptr, v & 0xFF)
+        self._write_u8_ptr(ptr.add(0x0001), (v >> 8) & 0xFF)
+
+    def _write_u8_ptr(self, ptr: BlockPtr, value: int) -> None:
+        ptr = self._normalize_map_ptr(ptr)
+        if ptr.index < 0:
+            raise IndexError(ptr.index)
+        cast(bytearray, ptr.array)[ptr.index] = value & 0xFF
+
+    def _as_u8(self, value_or_ptr: int | BlockPtr) -> int:
+        if isinstance(value_or_ptr, BlockPtr):
+            return self._read_u8_ptr(value_or_ptr) & 0xFF
+        if isinstance(value_or_ptr, int):
+            return value_or_ptr & 0xFF
+        raise TypeError(f"Expected int or BlockPtr, got {type(value_or_ptr)!r}")
+
+    @staticmethod
+    def _u16_to_signed(value: int) -> int:
+        v = int(value) & 0xFFFF
+        return v - 0x10000 if (v & 0x8000) else v
+
+    def _write_bytes_ptr(self, dst: BlockPtr, data: bytes | bytearray) -> None:
+        dst = self._normalize_map_ptr(dst)
+        array, index = dst.array, dst.index
+        payload = bytes(data)
+        if index < 0:
+            raise IndexError(index)
+        if payload:
+            # Force IndexError for out-of-range slices (including bytearray writes).
+            _ = array[index + len(payload) - 1]
+        cast(bytearray, array)[index : index + len(payload)] = payload
+
+    def _fill_bytes_ptr(self, dst: BlockPtr, size: int, value: int) -> None:
+        dst = self._normalize_map_ptr(dst)
+        array, index = dst.array, dst.index
+        size_int = int(size)
+        if index < 0:
+            raise IndexError(index)
+        if size_int > 0:
+            # Force IndexError for out-of-range slices (including bytearray writes).
+            _ = array[index + size_int - 1]
+        cast(bytearray, array)[index : index + size_int] = bytes([value & 0xFF]) * size_int
+
+    def _ptr_add(self, ptr: BlockPtr, delta: int) -> BlockPtr:
+        return ptr.add(int(delta))
+
+    def _display_attr_ptr(self, abs_addr: int) -> BlockPtr:
+        index = int(abs_addr) - 0x5800
+        if index < 0 or index >= len(self.var_display_attribute_ram):
+            raise ValueError(f"Display attribute address out of range: 0x{int(abs_addr) & 0xFFFF:04X}")
+        return BlockPtr(self.var_display_attribute_ram, index)
+
+    def _active_sprite_patch_source_ptr(self) -> BlockPtr:
+        return BlockPtr(self.var_active_sprite_subset_bank, 0x0580)
+
+    def _linear_viewport_stack_fill_top_ptr(self) -> BlockPtr:
+        return BlockPtr(
+            self.var_renderer_workspace,
+            RENDERER_WORKSPACE_OFF_LINEAR_VIEWPORT_WORK_BUFFER + 0x0F00,
+        )
+
+    def _visible_cell_staging_preset_row_ptr(self, row_index: int) -> BlockPtr:
+        idx = int(row_index)
+        if idx < 0 or idx >= len(_VISIBLE_CELL_STAGING_PRESET_ROW_OFFSETS):
+            raise ValueError(f"Preset row index out of range: {idx}")
+        return BlockPtr(
+            self.var_renderer_workspace,
+            RENDERER_WORKSPACE_OFF_VISIBLE_CELL_STAGING_LATTICE + _VISIBLE_CELL_STAGING_PRESET_ROW_OFFSETS[idx],
+        )
+
     def _highscore_row_ptr(self, row_index: int) -> BlockPtr:
         idx = int(row_index)
         if idx < 0 or idx >= len(self.var_highscore_row_templates):
@@ -649,50 +652,6 @@ class AlienEvolutionPort(StatefulManifestRuntime, AlienEvolutionData, ZXSpectrum
         if idx < 0 or idx >= len(self.var_highscore_row_score_offsets):
             raise ValueError(f"High-score score-field index out of range: {idx}")
         return self._highscore_row_ptr(idx).add(self.var_highscore_row_score_offsets[idx])
-
-    def _normalize_ptr_across_segments(
-        self,
-        ptr: BlockPtr,
-        segments: tuple[bytes | bytearray, ...],
-    ) -> BlockPtr:
-        seg_idx = -1
-        for i, segment in enumerate(segments):
-            if ptr.array is segment:
-                seg_idx = i
-                break
-        if seg_idx < 0:
-            return ptr
-
-        idx = ptr.index
-        seg_len = len(segments[seg_idx])
-        # Hot-path: most pointers are already in-range, so avoid allocating a new
-        # BlockPtr just to re-wrap the same (array, index) pair.
-        if 0 <= idx < seg_len:
-            return ptr
-
-        while idx < 0 and seg_idx > 0:
-            seg_idx -= 1
-            idx += len(segments[seg_idx])
-        while idx >= len(segments[seg_idx]) and seg_idx < (len(segments) - 1):
-            idx -= len(segments[seg_idx])
-            seg_idx += 1
-        return BlockPtr(segments[seg_idx], idx)
-
-    def _normalize_workspace_ptr(self, ptr: BlockPtr) -> BlockPtr:
-        if self._is_level_map_buffer(ptr.array):
-            return BlockPtr(ptr.array, self._wrap_level_index_periodic(ptr.index))
-        ptr = self._normalize_ptr_across_segments(
-            ptr,
-            (
-                self.var_visible_cell_staging_lattice,
-                self.var_visible_cell_staging_mid_window,
-                self.var_visible_cell_staging_tail_window,
-                self.var_render_work_area_tail,
-                self.var_cell_blit_work_buffer,
-                self.var_linear_viewport_work_buffer,
-            ),
-        )
-        return ptr
 
     def _resolve_object_callback(self, callback: ObjectCallback) -> ObjectCallback:
         if not callable(callback):
@@ -2596,7 +2555,10 @@ class AlienEvolutionPort(StatefulManifestRuntime, AlienEvolutionData, ZXSpectrum
         renderer_fill_counters = self.var_renderer_fill_counters
         renderer_fill_counters.counter_0 = 0x0E
         renderer_fill_counters.counter_1 = 0x25
-        de_stage = BlockPtr(self.var_visible_cell_staging_lattice, 0x0000)
+        de_stage = BlockPtr(
+            self.var_renderer_workspace,
+            RENDERER_WORKSPACE_OFF_VISIBLE_CELL_STAGING_LATTICE,
+        )
         hl_map = self.var_runtime_current_cell_ptr.add(-0x0040)
         c_col = self.var_current_map_coords.col & 0xFF
         b_row = self.var_current_map_coords.row & 0xFF
@@ -2656,8 +2618,14 @@ class AlienEvolutionPort(StatefulManifestRuntime, AlienEvolutionData, ZXSpectrum
         self._render_from_visible_cell_staging_lattice()
 
     def _render_from_visible_cell_staging_lattice(self) -> None:
-        hl_stage = BlockPtr(self.var_visible_cell_staging_lattice, 0x0000)
-        de_cell = BlockPtr(self.var_cell_blit_work_buffer, 0x0000)
+        hl_stage = BlockPtr(
+            self.var_renderer_workspace,
+            RENDERER_WORKSPACE_OFF_VISIBLE_CELL_STAGING_LATTICE,
+        )
+        de_cell = BlockPtr(
+            self.var_renderer_workspace,
+            RENDERER_WORKSPACE_OFF_CELL_BLIT_WORK_BUFFER,
+        )
         self.var_renderer_staging_cursor_ptr = hl_stage
         state = RenderStripState(
             hl_stage=hl_stage,
@@ -2696,7 +2664,10 @@ class AlienEvolutionPort(StatefulManifestRuntime, AlienEvolutionData, ZXSpectrum
             self._advance_to_next_cell_in_strip(state)
 
         self.viewport_strip_blit_core(
-            HL_src=BlockPtr(self.var_linear_viewport_work_buffer, 0x0000),
+            HL_src=BlockPtr(
+                self.var_renderer_workspace,
+                RENDERER_WORKSPACE_OFF_LINEAR_VIEWPORT_WORK_BUFFER,
+            ),
             DE_dst=BlockPtr(self.var_display_bitmap_ram, self.var_display_bitmap_strip_dst_anchor_4021),
             A_passes=0x02,
         )
@@ -2718,13 +2689,14 @@ class AlienEvolutionPort(StatefulManifestRuntime, AlienEvolutionData, ZXSpectrum
                 hl_src = hl_src.add(0x0005)
                 de_dst = de_dst.add(0x0004)
 
-                if (hl_src.index & 0x00E0) != 0x0000:
+                hl_src_local = hl_src.index - RENDERER_WORKSPACE_OFF_LINEAR_VIEWPORT_WORK_BUFFER
+                if (hl_src_local & 0x00E0) != 0x0000:
                     de_dst = de_dst.add(0x00E2)
                     continue
 
                 de_dst = de_dst.add(0x0002)
                 # Original ZX routine tested H bits on absolute source address in 0x9100-page.
-                hl_src_zx = (hl_src.index + 0x9100) & 0xFFFF
+                hl_src_zx = (hl_src_local + 0x9100) & 0xFFFF
                 if ((hl_src_zx >> 8) & 0x07) == 0x00:
                     break
 
@@ -3097,14 +3069,15 @@ class AlienEvolutionPort(StatefulManifestRuntime, AlienEvolutionData, ZXSpectrum
         if A_new == C_old:
             return A_new
 
-        dst, start = self._resolve_mutable_ptr(HL_bar)
+        bar_ptr = self._normalize_map_ptr(HL_bar)
+        dst, start = bar_ptr.array, bar_ptr.index
         if A_new >= C_old:
-            dst[start + A_new] = B_fill
+            cast(bytearray, dst)[start + A_new] = B_fill
             return A_new
 
         if A_new != 0x00:
-            dst[start + A_new] = B_fill
-        dst[start + A_new + 1] = 0x00
+            cast(bytearray, dst)[start + A_new] = B_fill
+        cast(bytearray, dst)[start + A_new + 1] = 0x00
         return A_new
 
     # ZX 0xE239..0xE261
@@ -3146,7 +3119,7 @@ class AlienEvolutionPort(StatefulManifestRuntime, AlienEvolutionData, ZXSpectrum
         self._rom_beeper(de_ticks=0x0032, hl_period=0x0032)
 
     def _movement_commit_shared(self, HL_cell: BlockPtr, DE_step: int, B_mark: int) -> None:
-        hl_cell = self._normalize_workspace_ptr(HL_cell)
+        hl_cell = self._normalize_map_ptr(HL_cell)
         de_step = DE_step & 0xFFFF
         de_step_signed = self._u16_to_signed(de_step)
         b_mark = B_mark & 0xFF
@@ -3286,7 +3259,7 @@ class AlienEvolutionPort(StatefulManifestRuntime, AlienEvolutionData, ZXSpectrum
 
     # ZX 0xE3AE..0xE3E8
     def alternate_movement_commit_path_low_cell(self, HL_cell: BlockPtr, DE_delta: int, B_marker: int) -> None:
-        hl_cell = self._normalize_workspace_ptr(HL_cell)
+        hl_cell = self._normalize_map_ptr(HL_cell)
         de_delta = DE_delta & 0xFFFF
         de_delta_signed = self._u16_to_signed(de_delta)
         b_marker = B_marker & 0xFF
@@ -3312,7 +3285,7 @@ class AlienEvolutionPort(StatefulManifestRuntime, AlienEvolutionData, ZXSpectrum
         HL_cell: BlockPtr,
     ) -> None:
         queue = queue_state
-        hl_cell_ptr = HL_cell
+        hl_cell_ptr = self._normalize_map_ptr(HL_cell)
         queue_entries = queue.entries
         queue.free_slots = ((queue.free_slots & 0xFF) - 0x01) & 0xFF
 
@@ -3439,7 +3412,7 @@ class AlienEvolutionPort(StatefulManifestRuntime, AlienEvolutionData, ZXSpectrum
                     raise TypeError(
                         "Transient queue handler must return BlockPtr as HL_cell in tuple form",
                     )
-                queue_entry.cell_ptr = hl_cell_next
+                queue_entry.cell_ptr = self._normalize_map_ptr(hl_cell_next)
 
     # ZX 0xE530..0xE559
     def fn_transient_queue_handler_core(self, A_state: int, HL_cell: BlockPtr) -> int:
@@ -3658,7 +3631,7 @@ class AlienEvolutionPort(StatefulManifestRuntime, AlienEvolutionData, ZXSpectrum
             hl_cell = self.var_transient_effect_ptr
             a_state, hl_cell = self.fn_repeat_wrapper_xe600(A_state=a_state, HL_cell=hl_cell)
             self.var_transient_effect_state = a_state & 0xFF
-            self.var_transient_effect_ptr = hl_cell
+            self.var_transient_effect_ptr = self._normalize_map_ptr(hl_cell)
         finally:
             self.patch_queue_c_root_low_code_limit = 0x0D
             self.patch_queue_c_scan_low_code_limit = 0x0D
@@ -3905,7 +3878,7 @@ class AlienEvolutionPort(StatefulManifestRuntime, AlienEvolutionData, ZXSpectrum
             return d_state, bc_cell
 
         self.var_transient_effect_state = a_seed & 0xFF
-        self.var_transient_effect_ptr = hl_spawn
+        self.var_transient_effect_ptr = self._normalize_map_ptr(hl_spawn)
         spawn_cell = self._read_u8_ptr(hl_spawn)
         self._write_u8_ptr(hl_spawn, (spawn_cell & 0xC0) | 0x39)
         return d_state, bc_cell
@@ -3970,7 +3943,7 @@ class AlienEvolutionPort(StatefulManifestRuntime, AlienEvolutionData, ZXSpectrum
                         raise TypeError("Callback returned None; expected int or (int, ptr)")
                     a_next = callback_result & 0xFF
                     bc_next_ptr = bc_cell
-                queue_entry.cell_ptr = bc_next_ptr
+                queue_entry.cell_ptr = self._normalize_map_ptr(bc_next_ptr)
                 queue_entry.state = a_next
 
     # ZX 0xEA0C..0xEA12
@@ -4234,7 +4207,7 @@ class AlienEvolutionPort(StatefulManifestRuntime, AlienEvolutionData, ZXSpectrum
 
         probe_cell = self._read_u8_ptr(probe_ptr)
         self._write_u8_ptr(probe_ptr, (probe_cell & 0xC0) | 0x1B)
-        self.var_runtime_current_cell_ptr = self._normalize_workspace_ptr(HL_pair)
+        self.var_runtime_current_cell_ptr = self._normalize_map_ptr(HL_pair)
 
         C_out = (C_flags | (B_mask & 0xFF)) & 0xFF
 
@@ -4298,7 +4271,7 @@ class AlienEvolutionPort(StatefulManifestRuntime, AlienEvolutionData, ZXSpectrum
     def fn_convert_map_pointer_hl_row_column(self, HL_cell: BlockPtr) -> None:
         # Original routine used patched global-address base offsets (0xEBEF immediate).
         # Port keeps map pointers typed and derives row/col directly from map-local index.
-        ptr = self._normalize_workspace_ptr(HL_cell)
+        ptr = self._normalize_map_ptr(HL_cell)
         active_map = self.var_active_map_base_ptr.array
         if ptr.array is not active_map:
             raise ValueError("Map row/col conversion expects pointer into active map buffer")
@@ -4341,10 +4314,11 @@ class AlienEvolutionPort(StatefulManifestRuntime, AlienEvolutionData, ZXSpectrum
             bc_cell = src_entry.cell_ptr
             if bc_cell is None:
                 raise ValueError("Runtime object queue entry has non-zero state and null cell pointer")
+            bc_cell = self._normalize_map_ptr(bc_cell)
 
             dst_entry = queue_dst.entries[dst_index]
             dst_entry.state = a_state
-            dst_entry.cell_ptr = bc_cell
+            dst_entry.cell_ptr = self._normalize_map_ptr(bc_cell)
             dst_index += 0x01
             a_spawn, dst_index = self.fn_spawn_state_selector_xec0a(
                 BC_cell=bc_cell,
@@ -4388,7 +4362,7 @@ class AlienEvolutionPort(StatefulManifestRuntime, AlienEvolutionData, ZXSpectrum
         queue_write_index: int,
         A_state: int,
     ) -> int:
-        hl_cell = HL_cell
+        hl_cell = self._normalize_map_ptr(HL_cell)
         write_index = int(queue_write_index)
         a_state = A_state & 0xFF
 
@@ -4400,7 +4374,7 @@ class AlienEvolutionPort(StatefulManifestRuntime, AlienEvolutionData, ZXSpectrum
             raise ValueError("Runtime object queue destination overflow")
         dst_entry = queue_dst.entries[write_index]
         dst_entry.state = a_state
-        dst_entry.cell_ptr = hl_cell
+        dst_entry.cell_ptr = self._normalize_map_ptr(hl_cell)
         write_index += 0x01
 
         self._write_u8_ptr(hl_cell, (cell & 0xC0) | 0x19)
@@ -4773,7 +4747,10 @@ class AlienEvolutionPort(StatefulManifestRuntime, AlienEvolutionData, ZXSpectrum
     # ZX 0xEEA7..0xEEB0
     def fn_staging_buffer_scrub_marker_5_entry(self, A_marker):
         marker = self._as_u8(A_marker)
-        hl_cell = BlockPtr(self.var_visible_cell_staging_lattice, 0x0000)
+        hl_cell = BlockPtr(
+            self.var_renderer_workspace,
+            RENDERER_WORKSPACE_OFF_VISIBLE_CELL_STAGING_LATTICE,
+        )
         bc_left = 0x021C
         cond_opcode = self.patch_scrub_scanner_call_condition_opcode & 0xFF
 
@@ -4898,7 +4875,10 @@ class AlienEvolutionPort(StatefulManifestRuntime, AlienEvolutionData, ZXSpectrum
     # ZX 0xEF87..0xEFB1
     def fn_visible_cell_staging_preset_core(self, IX_tpl: BlockPtr) -> None:
         self._fill_bytes_ptr(
-            BlockPtr(self.var_visible_cell_staging_lattice, 0x0000),
+            BlockPtr(
+                self.var_renderer_workspace,
+                RENDERER_WORKSPACE_OFF_VISIBLE_CELL_STAGING_LATTICE,
+            ),
             0x024A,
             0x00,
         )
@@ -5477,7 +5457,7 @@ class AlienEvolutionPort(StatefulManifestRuntime, AlienEvolutionData, ZXSpectrum
         else:
             raise RuntimeError("scheduler_triggered_marker_seeding: no empty map cell found")
 
-        self.var_marker_event_cell_ptr = HL_probe
+        self.var_marker_event_cell_ptr = self._normalize_map_ptr(HL_probe)
         self._write_u8_ptr(HL_probe, self._read_u8_ptr(HL_probe) | 0x2E)
         self._set_patch_callback_hook_opcode(0x2A)
         self.var_marker_index_state = 0x00
