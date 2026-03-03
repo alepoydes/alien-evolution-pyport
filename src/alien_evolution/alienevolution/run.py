@@ -2,8 +2,6 @@ from __future__ import annotations
 
 from .logic import AlienEvolutionPort
 from ..pyxel.runner import (
-    DEFAULT_HISTORY_INTERVAL_HOST_FRAMES,
-    DEFAULT_HISTORY_MAX_CHECKPOINTS,
     run_pyxel_game,
 )
 
@@ -11,6 +9,10 @@ def main() -> None:
     run_pyxel_game(
         AlienEvolutionPort(),
         title="Alien Evolution (Python port)",
-        history_interval_host_frames=DEFAULT_HISTORY_INTERVAL_HOST_FRAMES,
-        history_max_checkpoints=DEFAULT_HISTORY_MAX_CHECKPOINTS,
+        # In the browser, periodic full-state snapshots are a noticeable source
+        # of stutter. Keep the runner feature available for debugging/ML
+        # workflows, but disable it for the default "play" entry-point.
+        history_interval_host_frames=0,
+        history_max_checkpoints=0,
+        dev_tools=False,
     )

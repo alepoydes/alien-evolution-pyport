@@ -30,6 +30,7 @@ from ..zx.state import (
     compute_schema_hash,
     StatefulManifestRuntime,
 )
+from ..zx.config import ENABLE_RUNTIME_CHECKS
 
 StreamSlot = Literal["stream_ptr_a", "stream_ptr_b", "stream_ptr_c", "stream_ptr_d"]
 
@@ -531,9 +532,11 @@ class AlienEvolutionPort(StatefulManifestRuntime, AlienEvolutionData, ZXSpectrum
     def _resolve_mutable_ptr(self, ptr: BlockPtr) -> tuple[bytearray, int]:
         ptr = self._normalize_workspace_ptr(ptr)
         array, index = ptr.array, ptr.index
-        if not isinstance(array, bytearray):
+        # In the fidelity/debug build we keep explicit mutability errors.
+        # In the fast path we let the underlying bytearray assignment raise.
+        if ENABLE_RUNTIME_CHECKS and not isinstance(array, bytearray):
             raise TypeError(f"Pointer targets immutable block: {type(array)!r}")
-        return array, index
+        return array, index  # type: ignore[return-value]
 
     def _read_bytes(self, src: BlockPtr, size: int) -> bytes:
         src = self._normalize_workspace_ptr(src)
@@ -576,6 +579,8 @@ class AlienEvolutionPort(StatefulManifestRuntime, AlienEvolutionData, ZXSpectrum
 
     @staticmethod
     def _check_span_bounds(*, array: bytes | bytearray, index: int, size: int, op: str) -> None:
+        if not ENABLE_RUNTIME_CHECKS:
+            return
         if size < 0:
             raise ValueError(f"Negative span for {op}: size={size}")
         end = index + size
@@ -659,6 +664,12 @@ class AlienEvolutionPort(StatefulManifestRuntime, AlienEvolutionData, ZXSpectrum
             return ptr
 
         idx = ptr.index
+        seg_len = len(segments[seg_idx])
+        # Hot-path: most pointers are already in-range, so avoid allocating a new
+        # BlockPtr just to re-wrap the same (array, index) pair.
+        if 0 <= idx < seg_len:
+            return ptr
+
         while idx < 0 and seg_idx > 0:
             seg_idx -= 1
             idx += len(segments[seg_idx])
@@ -5809,6 +5820,39 @@ class AlienEvolutionPort(StatefulManifestRuntime, AlienEvolutionData, ZXSpectrum
     def forced_interpreter_abort_path(self):
         raise ForcedInterpreterAbort()
 
+    @staticmethod
+    def _divider_toggle_count(iterations: int, *, initial: int, reload: int) -> int:
+        """Count how many times an 8-bit DEC/JP Z style divider toggles.
+
+        The inner stream engine uses two nested dividers (E and L counters).
+        The original port simulated the Z80 loop literally, but for gameplay we
+        only need the *toggle counts* (to derive the semantic audio commands).
+
+        This helper reproduces the exact behaviour of:
+
+        - counter = (counter - 1) & 0xFF
+        - if counter == 0: toggle; counter = reload
+
+        without iterating per-cycle.
+        """
+
+        n = int(iterations)
+        if n <= 0:
+            return 0
+
+        ctr0 = int(initial) & 0xFF
+        reload_u8 = int(reload) & 0xFF
+
+        # How many iterations until the *first* toggle?
+        # If ctr0 is 0, DEC wraps to 255 and it takes a full 256 steps.
+        first_period = ctr0 if ctr0 != 0 else 0x100
+        if n < first_period:
+            return 0
+
+        # After the first toggle the counter is reloaded.
+        period = reload_u8 if reload_u8 != 0 else 0x100
+        return 1 + ((n - first_period) // period)
+
     # ZX 0xFC13..0xFC6F
     def core_command_interpreter_scenario_stream_engine(self) -> int:
         cmd1 = self.fn_stream_byte_fetch_helper(stream_slot="stream_ptr_a")
@@ -5829,48 +5873,40 @@ class AlienEvolutionPort(StatefulManifestRuntime, AlienEvolutionData, ZXSpectrum
         if (((hl_t2 >> 8) & 0xFF) == 0x01) and (((hl_t1 >> 8) & 0xFF) == 0x01):
             return self.pre_delay_calibration_helper()
 
+        # ------------------------------------------------------------------
+        # Performance note
+        #
+        # The original Python port translated the Z80 stream engine very
+        # literally and iterated the inner timing loop step-by-step.
+        #
+        # That is great for debugging, but in the browser the per-iteration
+        # Python overhead becomes a major FPS limiter.
+        #
+        # For gameplay we only need:
+        #   - the number of loop iterations (to compute duration)
+        #   - how many times the fast/slow dividers toggled
+        #
+        # Those can be computed analytically.
+        # ------------------------------------------------------------------
+
         c_cycles = self.var_stream_timing_control_byte & 0xFF
-        b_phase = 0x00
-        a_main = self.var_stream_cmd_byte_2 & 0xFF
-        a_alt = a_main
+        if c_cycles == 0x00:
+            # Matches the behaviour of the existing implementation: with C==0
+            # the loop executes exactly one body iteration.
+            iterations = 1
+        else:
+            # C increments once per B-wrap (B is an 8-bit down-counter), and the
+            # loop ends when INC C wraps back to 0.
+            iterations = (0x100 - c_cycles) * 0x100
+
         e_ctr = hl_t1 & 0xFF
         e_reload = (hl_t1 >> 8) & 0xFF
         l_ctr = hl_t2 & 0xFF
         l_reload = (hl_t2 >> 8) & 0xFF
-        toggle_mask = 0x10
-        iterations = 0
-        fast_wraps = 0
-        slow_wraps = 0
 
-        while True:
-            (
-                a_main,
-                a_alt,
-                e_ctr,
-                l_ctr,
-                b_phase,
-                c_cycles,
-                fast_toggled,
-                slow_toggled,
-                iteration_advanced,
-            ) = self.interpreter_inner_loop_branch_helper_timing(
-                A_main=a_main,
-                A_alt=a_alt,
-                E_ctr=e_ctr,
-                E_reload=e_reload,
-                L_ctr=l_ctr,
-                L_reload=l_reload,
-                B_phase=b_phase,
-                C_cycles=c_cycles,
-                toggle_mask=toggle_mask,
-            )
-            iterations += iteration_advanced
-            if fast_toggled:
-                fast_wraps += 1
-            if slow_toggled:
-                slow_wraps += 1
-            if c_cycles == 0x00:
-                break
+        fast_wraps = self._divider_toggle_count(iterations, initial=e_ctr, reload=e_reload)
+        slow_wraps = self._divider_toggle_count(iterations, initial=l_ctr, reload=l_reload)
+
         return self._emit_stream_semantic_mix(
             iterations=iterations,
             fast_wraps=fast_wraps,
@@ -6031,10 +6067,14 @@ class AlienEvolutionPort(StatefulManifestRuntime, AlienEvolutionData, ZXSpectrum
             C_wait = (~timing_ctl) & 0xFF
         C_wait &= 0xFF
         outer = C_wait if C_wait != 0x00 else 0x100
-        for _ in range(outer):
-            for _ in range(0x100):
-                pass
         # FC82..FC96 delay loop approximation (8-bit nested counters with NOP pad).
+        #
+        # IMPORTANT: The old implementation executed a Python busy-wait loop
+        # (nested `for ...: pass`) to mimic the Z80 delay.
+        #
+        # For the port we only need the *timing cost* as a number consumed by
+        # the outer pacing logic; burning real CPU time is counter-productive
+        # (especially in Pyodide).
         return int(outer * 0x100 * 13)
 
     # ZX 0xFCD6..0xFCF8

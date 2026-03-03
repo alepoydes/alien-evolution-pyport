@@ -3,8 +3,10 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
+from .config import ENABLE_RUNTIME_CHECKS
 
-@dataclass(frozen=True)
+
+@dataclass(frozen=True, slots=True)
 class BlockPtr:
     """Pointer into a concrete block buffer."""
 
@@ -27,6 +29,8 @@ class BlockPtr:
         )
 
     def check_span(self, size: int, op: str) -> None:
+        if not ENABLE_RUNTIME_CHECKS:
+            return
         if size < 0:
             raise ValueError(f"Negative span for {op}: size={size}")
         end = self.index + int(size)
@@ -64,7 +68,7 @@ class BlockPtr:
         self.array[self.index : self.index + int(size)] = bytes([value & 0xFF]) * int(size)
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
 class StructFieldPtr:
     """Pointer into typed structured data (lists/dataclasses), not byte memory."""
 

@@ -116,6 +116,7 @@ def run_pyxel_game(
     history_max_checkpoints: int = DEFAULT_HISTORY_MAX_CHECKPOINTS,
     quicksave_path: Path | None = None,
     screen_message_ttl_seconds: float = DEFAULT_SCREEN_MESSAGE_TTL_SECONDS,
+    dev_tools: bool = True,
 ) -> None:
     """Run a frame-step runtime in a Pyxel window."""
     import pyxel
@@ -127,19 +128,24 @@ def run_pyxel_game(
     audio_player = PyxelAudioPlayer()
     pending_delay_frames = 0
     host_frame_index = 0
-    message_ttl_host_frames = max(1, int(round(float(screen_message_ttl_seconds) * fps)))
-    screen_messages = ScreenMessageQueue(ttl_host_frames=message_ttl_host_frames)
-    if quicksave_path is None:
-        quicksave_file = Path.cwd() / DEFAULT_QUICKSAVE_FILENAME
-    else:
-        quicksave_file = Path(quicksave_path)
-        if not quicksave_file.is_absolute():
-            quicksave_file = Path.cwd() / quicksave_file
+    screen_messages: ScreenMessageQueue | None = None
+    quicksave_file: Path | None = None
+    if dev_tools:
+        message_ttl_host_frames = max(1, int(round(float(screen_message_ttl_seconds) * fps)))
+        screen_messages = ScreenMessageQueue(ttl_host_frames=message_ttl_host_frames)
+        if quicksave_path is None:
+            quicksave_file = Path.cwd() / DEFAULT_QUICKSAVE_FILENAME
+        else:
+            quicksave_file = Path(quicksave_path)
+            if not quicksave_file.is_absolute():
+                quicksave_file = Path.cwd() / quicksave_file
 
-    try:
-        stateful_runtime: StatefulRuntime | None = ensure_stateful_runtime(runtime)
-    except TypeError:
-        stateful_runtime = None
+    stateful_runtime: StatefulRuntime | None = None
+    if dev_tools or history_interval_host_frames > 0:
+        try:
+            stateful_runtime = ensure_stateful_runtime(runtime)
+        except TypeError:
+            stateful_runtime = None
 
     history: RuntimeStateHistory | None = None
     if stateful_runtime is not None and history_interval_host_frames > 0:
@@ -174,11 +180,15 @@ def run_pyxel_game(
 
     def _push_screen_message(text: str) -> None:
         nonlocal redraw_required
+        if screen_messages is None:
+            return
         screen_messages.push(text, host_frame_index=host_frame_index)
         redraw_required = True
 
     def _handle_state_hotkeys() -> None:
         nonlocal pending_delay_frames, history, redraw_required
+        if not dev_tools:
+            return
         if hasattr(pyxel, "KEY_F10") and pyxel.btnp(pyxel.KEY_F10):
             try:
                 runtime.reset()
@@ -199,6 +209,7 @@ def run_pyxel_game(
             return
         if hasattr(pyxel, "KEY_F5") and pyxel.btnp(pyxel.KEY_F5):
             try:
+                assert quicksave_file is not None
                 save_state_json(quicksave_file, _save_autosave_state(stateful_runtime))
                 _push_screen_message("Quick-save done")
             except Exception as exc:  # pragma: no cover - runtime/UI error path
@@ -206,6 +217,7 @@ def run_pyxel_game(
                 _push_screen_message("Quick-save failed")
         if hasattr(pyxel, "KEY_F9") and pyxel.btnp(pyxel.KEY_F9):
             try:
+                assert quicksave_file is not None
                 envelope = load_state_json(quicksave_file)
                 stateful_runtime.load_state(envelope)
                 pending_delay_frames = 0
@@ -258,11 +270,17 @@ def run_pyxel_game(
     def _update() -> None:
         nonlocal host_frame_index, last_output, pending_delay_frames, redraw_required
         host_frame_index += 1
-        messages_before = tuple(screen_messages.messages)
+        if screen_messages is not None:
+            messages_before = tuple(screen_messages.messages)
+        else:
+            messages_before = ()
+
         _handle_state_hotkeys()
-        screen_messages.prune(host_frame_index=host_frame_index)
-        if tuple(screen_messages.messages) != messages_before:
-            redraw_required = True
+
+        if screen_messages is not None:
+            screen_messages.prune(host_frame_index=host_frame_index)
+            if tuple(screen_messages.messages) != messages_before:
+                redraw_required = True
 
         if pending_delay_frames > 0:
             prev_flash_phase = int(last_output.flash_phase) & 0x01
@@ -304,8 +322,9 @@ def run_pyxel_game(
         text_x = 4
         text_y = 4
         row_height = 8
-        for idx, message in enumerate(screen_messages.messages):
-            pyxel.text(text_x, text_y + idx * row_height, message, 10)
+        if screen_messages is not None:
+            for idx, message in enumerate(screen_messages.messages):
+                pyxel.text(text_x, text_y + idx * row_height, message, 10)
         redraw_required = False
 
     pyxel.init(width, height, title=title, fps=fps, display_scale=display_scale)
