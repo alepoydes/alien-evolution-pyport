@@ -2221,6 +2221,12 @@ class AlienEvolutionPort(StatefulManifestRuntime, AlienEvolutionData, ZXSpectrum
         self.patch_control_scan_slot_1_bit_opcode = 0x5F
         self.patch_control_scan_slot_5_bit_opcode = 0x67
         self.fn_input_patch_preset()
+        # Kempston preset keeps secondary/use on a single ZX key-matrix bit
+        # (SYMBOL SHIFT), while host/gamepad mapping feeds this virtual button.
+        self.patch_control_scan_slot_6_port_word = 0x7FFE
+        self.patch_control_scan_slot_6_prefix_opcode = 0xCB
+        self.patch_control_scan_slot_6_bit_opcode = 0x4F
+        self.patch_control_scan_slot_6_branch_opcode = 0xCA
         self.front_end_selection_commit(A_sel=0x02)
 
     # ZX 0x6DC0..0x6DFA

@@ -7,20 +7,28 @@ from ..zx.runtime import FrameInput
 # bit0 RIGHT, bit1 LEFT, bit2 DOWN, bit3 UP, bit4 FIRE
 
 
+def _btn_by_name(pyxel_mod: object, name: str) -> bool:
+    """Safely read a Pyxel button constant by attribute name."""
+    key = getattr(pyxel_mod, name, None)
+    if key is None:
+        return False
+    return bool(pyxel_mod.btn(key))
+
+
 def joy_kempston() -> int:
-    """Return a Kempston-like joystick state from Pyxel keys."""
+    """Return a Kempston-like joystick state from gamepad and WASD+Space."""
     import pyxel
 
     v = 0
-    if pyxel.btn(pyxel.KEY_RIGHT):
+    if _btn_by_name(pyxel, "GAMEPAD1_BUTTON_DPAD_RIGHT") or _btn_by_name(pyxel, "KEY_D"):
         v |= 0x01
-    if pyxel.btn(pyxel.KEY_LEFT):
+    if _btn_by_name(pyxel, "GAMEPAD1_BUTTON_DPAD_LEFT") or _btn_by_name(pyxel, "KEY_A"):
         v |= 0x02
-    if pyxel.btn(pyxel.KEY_DOWN):
+    if _btn_by_name(pyxel, "GAMEPAD1_BUTTON_DPAD_DOWN") or _btn_by_name(pyxel, "KEY_S"):
         v |= 0x04
-    if pyxel.btn(pyxel.KEY_UP):
+    if _btn_by_name(pyxel, "GAMEPAD1_BUTTON_DPAD_UP") or _btn_by_name(pyxel, "KEY_W"):
         v |= 0x08
-    if pyxel.btn(pyxel.KEY_SPACE):
+    if _btn_by_name(pyxel, "GAMEPAD1_BUTTON_A") or _btn_by_name(pyxel, "KEY_SPACE"):
         v |= 0x10
     return v
 
@@ -82,6 +90,32 @@ def keyboard_rows() -> tuple[int, ...]:
         if row_idx is None:
             continue
         rows[row_idx] &= ~(1 << mapped[1])
+
+    # Mirror gamepad movement/action into the classic WASD+Space matrix layout.
+    # This keeps keyboard-scanned code paths (menus/define-keys/etc.) compatible.
+    for btn_name, key_char in (
+        ("GAMEPAD1_BUTTON_DPAD_UP", "w"),
+        ("GAMEPAD1_BUTTON_DPAD_LEFT", "a"),
+        ("GAMEPAD1_BUTTON_DPAD_DOWN", "s"),
+        ("GAMEPAD1_BUTTON_DPAD_RIGHT", "d"),
+        ("GAMEPAD1_BUTTON_A", " "),
+    ):
+        if not _btn_by_name(pyxel, btn_name):
+            continue
+        mapped = KEY_CHAR_TO_ZX_KEYBOARD_SCAN.get(key_char)
+        if mapped is None:
+            continue
+        row_idx = ZX_KEYBOARD_ROW_INDEX_BY_PORT.get(mapped[0])
+        if row_idx is None:
+            continue
+        rows[row_idx] &= ~(1 << mapped[1])
+
+    # Virtual gamepad-B trigger: physical GAMEPAD B or host key E.
+    # Route it to SYMBOL SHIFT bit used by kempston slot6 preset.
+    if _btn_by_name(pyxel, "GAMEPAD1_BUTTON_B") or _btn_by_name(pyxel, "KEY_E"):
+        row_idx = ZX_KEYBOARD_ROW_INDEX_BY_PORT.get(0x7FFE)
+        if row_idx is not None:
+            rows[row_idx] &= ~(1 << 1)
 
     return tuple(v & 0xFF for v in rows)
 

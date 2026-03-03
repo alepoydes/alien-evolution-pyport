@@ -23,6 +23,15 @@ class KempstonPortSemanticsTests(unittest.TestCase):
         runtime.sample_inputs(joy_kempston=0x1B, keyboard_rows=(0xFF,) * 8)
         self.assertEqual(runtime.in_port(0x001F), 0x1B)
 
+    def test_kempston_preset_slot6_is_symbol_shift_only(self) -> None:
+        runtime = AlienEvolutionPort()
+        runtime.control_preset_branch()
+
+        self.assertEqual(runtime.patch_control_scan_slot_6_port_word, 0x7FFE)
+        self.assertEqual(runtime.patch_control_scan_slot_6_prefix_opcode, 0xCB)
+        self.assertEqual(runtime.patch_control_scan_slot_6_bit_opcode, 0x4F)
+        self.assertEqual(runtime.patch_control_scan_slot_6_branch_opcode, 0xCA)
+
 
 if __name__ == "__main__":
     unittest.main()
