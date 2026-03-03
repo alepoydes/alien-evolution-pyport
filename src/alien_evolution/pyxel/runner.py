@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import sys
+import time
 from collections import deque
 from dataclasses import dataclass
 from pathlib import Path
@@ -168,6 +169,9 @@ def run_pyxel_game(
             border_color=0,
         )
     redraw_required = True
+    fps_target = max(1.0, float(fps))
+    max_elapsed_catchup_s = 0.25
+    last_update_clock_s = time.perf_counter()
 
     def _refresh_snapshot_output() -> None:
         nonlocal last_output
@@ -267,41 +271,103 @@ def run_pyxel_game(
             "Runtime requested post-step delay but does not implement advance_host_frame()",
         )
 
+    def _advance_delay_host_frame(*, skip_heavy_ops: bool) -> None:
+        nonlocal last_output, pending_delay_frames, redraw_required
+        if pending_delay_frames <= 0:
+            return
+        prev_flash_phase = int(last_output.flash_phase) & 0x01
+        prev_border_color = int(last_output.border_color) & 0x07
+        _advance_runtime_host_frame()
+        pending_delay_frames -= 1
+        if isinstance(runtime, ZXSpectrumServiceLayer):
+            next_flash_phase = int(runtime.flash_phase) & 0x01
+            next_border_color = int(runtime.border_color) & 0x07
+            if (next_flash_phase != prev_flash_phase) or (next_border_color != prev_border_color):
+                redraw_required = True
+            # In delay frames ZX screen bytes are unchanged; avoid expensive full snapshot copies.
+            last_output = StepOutput(
+                screen_bitmap=last_output.screen_bitmap,
+                screen_attrs=last_output.screen_attrs,
+                flash_phase=next_flash_phase,
+                audio_commands=(),
+                border_color=next_border_color,
+                timing=last_output.timing,
+            )
+            return
+
+        if skip_heavy_ops:
+            next_flash_raw = getattr(runtime, "flash_phase", None)
+            next_border_raw = getattr(runtime, "border_color", None)
+            if isinstance(next_flash_raw, int) and isinstance(next_border_raw, int):
+                next_flash_phase = int(next_flash_raw) & 0x01
+                next_border_color = int(next_border_raw) & 0x07
+                if (next_flash_phase != prev_flash_phase) or (next_border_color != prev_border_color):
+                    redraw_required = True
+                last_output = StepOutput(
+                    screen_bitmap=last_output.screen_bitmap,
+                    screen_attrs=last_output.screen_attrs,
+                    flash_phase=next_flash_phase,
+                    audio_commands=(),
+                    border_color=next_border_color,
+                    timing=last_output.timing,
+                )
+                return
+
+        _refresh_snapshot_output()
+        next_flash_phase = int(last_output.flash_phase) & 0x01
+        next_border_color = int(last_output.border_color) & 0x07
+        if (next_flash_phase != prev_flash_phase) or (next_border_color != prev_border_color):
+            redraw_required = True
+
     def _update() -> None:
         nonlocal host_frame_index, last_output, pending_delay_frames, redraw_required
-        host_frame_index += 1
-        if screen_messages is not None:
-            messages_before = tuple(screen_messages.messages)
-        else:
-            messages_before = ()
+        nonlocal last_update_clock_s
+
+        now_s = time.perf_counter()
+        elapsed_s = now_s - last_update_clock_s
+        if elapsed_s < 0.0:
+            elapsed_s = 0.0
+        # Long pauses (e.g. hidden tab) should not trigger huge burst processing.
+        if elapsed_s > max_elapsed_catchup_s:
+            elapsed_s = max_elapsed_catchup_s
+        last_update_clock_s = now_s
+
+        elapsed_host_frames = max(1, int(elapsed_s * fps_target))
+        host_frame_index += elapsed_host_frames
 
         _handle_state_hotkeys()
 
         if screen_messages is not None:
+            messages_before = tuple(screen_messages.messages)
             screen_messages.prune(host_frame_index=host_frame_index)
             if tuple(screen_messages.messages) != messages_before:
                 redraw_required = True
 
+        remaining_host_frames = elapsed_host_frames
         if pending_delay_frames > 0:
-            prev_flash_phase = int(last_output.flash_phase) & 0x01
-            prev_border_color = int(last_output.border_color) & 0x07
-            _advance_runtime_host_frame()
-            pending_delay_frames -= 1
-            _refresh_snapshot_output()
-            if (
-                ((int(last_output.flash_phase) & 0x01) != prev_flash_phase)
-                or ((int(last_output.border_color) & 0x07) != prev_border_color)
-            ):
-                redraw_required = True
-            audio_player.update()
-            if history is not None and stateful_runtime is not None:
-                history.maybe_capture(stateful_runtime, host_frame_index=host_frame_index)
-            return
+            consumed_delay_frames = min(remaining_host_frames, pending_delay_frames)
+            for idx in range(consumed_delay_frames):
+                # For catch-up bursts, keep intermediate delay frames lightweight.
+                _advance_delay_host_frame(skip_heavy_ops=(idx + 1) < consumed_delay_frames)
+            remaining_host_frames -= consumed_delay_frames
+            if pending_delay_frames > 0 or remaining_host_frames <= 0:
+                audio_player.update()
+                if history is not None and stateful_runtime is not None:
+                    history.maybe_capture(stateful_runtime, host_frame_index=host_frame_index)
+                return
 
+        # Keep runtime workload stable: do at most one gameplay step per callback.
         last_output = runtime.step(read_frame_input())
         redraw_required = True
         pending_delay_frames = max(0, int(last_output.timing.delay_after_step_frames))
         audio_player.submit(last_output.audio_commands)
+        remaining_host_frames -= 1
+
+        if remaining_host_frames > 0 and pending_delay_frames > 0:
+            consumed_delay_frames = min(remaining_host_frames, pending_delay_frames)
+            for idx in range(consumed_delay_frames):
+                _advance_delay_host_frame(skip_heavy_ops=(idx + 1) < consumed_delay_frames)
+
         audio_player.update()
         if history is not None and stateful_runtime is not None:
             history.maybe_capture(stateful_runtime, host_frame_index=host_frame_index)
