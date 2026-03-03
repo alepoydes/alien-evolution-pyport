@@ -1927,9 +1927,9 @@ class AlienEvolutionPort(StatefulManifestRuntime, AlienEvolutionData, ZXSpectrum
         if (port & 0x00FF) == 0x1F:
             return self.joy_kempston
         if (port & 0x00FF) == 0xDF:
-            # 0x00DF control preset path uses keyboard-style BIT/JP Z tests
-            # (pressed == bit 0), so expose joystick state as active-low.
-            return ((~self.joy_kempston) & 0x1F) | 0xE0
+            # 0x00DF control preset path (Kempston) uses BIT/JP NZ tests in
+            # the original patch table, so keep pressed directions active-high.
+            return (self.joy_kempston & 0x1F) | 0xE0
         if (port & 0x00FF) == 0xFE:
             value = 0xFF
             for row_index, row_value in enumerate(self.keyboard_rows):
