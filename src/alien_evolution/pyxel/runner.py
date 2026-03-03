@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Deque, Sequence
 
 from ..fileio.stateio import load_state_json, save_state_json
-from ..zx.runtime import FrameInput, FrameStepRuntime, StepOutput, ZXSpectrumServiceLayer
+from ..zx.runtime import FrameStepRuntime, StepOutput, StepTiming, ZXSpectrumServiceLayer
 from ..zx.screen import ZX_ATTR_BYTES, ZX_BITMAP_BYTES, ZX_SCREEN_H, ZX_SCREEN_W
 from ..zx.state import StatefulRuntime, ensure_stateful_runtime
 from .input import read_frame_input
@@ -19,6 +19,7 @@ DEFAULT_HISTORY_INTERVAL_HOST_FRAMES = 500
 DEFAULT_HISTORY_MAX_CHECKPOINTS = 120
 DEFAULT_QUICKSAVE_FILENAME = "pyxel_quicksave.state.json"
 DEFAULT_SCREEN_MESSAGE_TTL_SECONDS = 1.0
+DEFAULT_MAX_ELAPSED_CATCHUP_SECONDS = 0.25
 
 
 def _save_autosave_state(runtime: StatefulRuntime) -> dict[str, object]:
@@ -170,8 +171,9 @@ def run_pyxel_game(
         )
     redraw_required = True
     fps_target = max(1.0, float(fps))
-    max_elapsed_catchup_s = 0.25
+    max_elapsed_catchup_s = float(DEFAULT_MAX_ELAPSED_CATCHUP_SECONDS)
     last_update_clock_s = time.perf_counter()
+    host_frame_accumulator = 0.0
 
     def _refresh_snapshot_output() -> None:
         nonlocal last_output
@@ -291,7 +293,7 @@ def run_pyxel_game(
                 flash_phase=next_flash_phase,
                 audio_commands=(),
                 border_color=next_border_color,
-                timing=last_output.timing,
+                timing=StepTiming(delay_after_step_frames=0),
             )
             return
 
@@ -309,7 +311,7 @@ def run_pyxel_game(
                     flash_phase=next_flash_phase,
                     audio_commands=(),
                     border_color=next_border_color,
-                    timing=last_output.timing,
+                    timing=StepTiming(delay_after_step_frames=0),
                 )
                 return
 
@@ -321,7 +323,7 @@ def run_pyxel_game(
 
     def _update() -> None:
         nonlocal host_frame_index, last_output, pending_delay_frames, redraw_required
-        nonlocal last_update_clock_s
+        nonlocal last_update_clock_s, host_frame_accumulator
 
         now_s = time.perf_counter()
         elapsed_s = now_s - last_update_clock_s
@@ -332,7 +334,12 @@ def run_pyxel_game(
             elapsed_s = max_elapsed_catchup_s
         last_update_clock_s = now_s
 
-        elapsed_host_frames = max(1, int(elapsed_s * fps_target))
+        # Preserve fractional frame time so timing does not drift under jitter.
+        host_frame_accumulator += elapsed_s * fps_target
+        if host_frame_accumulator < 1.0:
+            host_frame_accumulator = 1.0
+        elapsed_host_frames = int(host_frame_accumulator)
+        host_frame_accumulator -= float(elapsed_host_frames)
         host_frame_index += elapsed_host_frames
 
         _handle_state_hotkeys()
