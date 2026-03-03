@@ -6,7 +6,7 @@ This repository is a modern **Python/Pyxel** port of the original ZX game. The a
 
 ## Play Online
 
-- [Play Alien Evolution in your browser](https://alepoydes.github.io/alien-evolution-pyport/alien-evolution.html) (`W/A/S/D` move, `Space` fire, `Enter` switch weapon)
+- [Play Alien Evolution in your browser](https://kitao.github.io/pyxel/wasm/launcher/?play=alepoydes.alien-evolution-pyport.alien-evolution) (`W/A/S/D` move, `Space` fire, `Enter` switch weapon). Known issues in the web version: occasional audio stuttering and sticky buttons.
 
 <table>
   <tr>
