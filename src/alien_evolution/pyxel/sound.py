@@ -61,9 +61,27 @@ def _noise_note_from_hz(freq: float) -> str:
 
 
 def _stream_special_noise_note_from_hz(freq: float) -> str:
-    """Bright bins for FD0E stream-special beeper hash."""
-    f = max(0.0, float(freq))
-    return "A#4" if f < 5000.0 else "B4"
+    """Bright bins for FD0E stream-special beeper hash.
+
+    Original FD0E drives port 0xFE bit 4 from BIT 0 of ROM bytes, gated by D,
+    giving an edge-rate roughly 2.5..18 kHz for typical patterns.
+    Pyxel noise has a much lower controllable range, so compress into bright bins.
+    """
+    if freq <= 0:
+        return "F4"
+
+    src_lo = 2500.0
+    src_hi = 18_000.0
+    src_hz = max(src_lo, min(src_hi, float(freq)))
+    t = (math.log(src_hz) - math.log(src_lo)) / (math.log(src_hi) - math.log(src_lo))
+    if t < 0.0:
+        t = 0.0
+    if t > 1.0:
+        t = 1.0
+
+    bins = ("F4", "F#4", "G4", "G#4", "A4", "A#4", "B4")
+    idx = int(round((len(bins) - 1) * (t**0.7)))
+    return bins[idx]
 
 
 def _normalized_command(cmd: AudioCommand) -> AudioCommand | None:

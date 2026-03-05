@@ -6128,25 +6128,37 @@ class AlienEvolutionPort(StatefulManifestRuntime, AlienEvolutionData, ZXSpectrum
         pending_delay_ticks = max(0, int(self._stream_pending_delay_ticks[0]))
         density = float(D_bits.bit_count()) / 8.0
 
-        # FD0E path timing estimate:
-        # - C is an outer counter decremented when B wraps (B starts from 0, so 256 steps).
-        # - Base per-step cost is ~86 clock units on carry-clear branch.
-        # - Carry-set branch is about +10 units on average (density-weighted).
-        # - Each B-wrap adds DEC C + JP NZ (+14), plus fixed prologue/epilogue.
+        # FD0E path timing model (cycle-checked against the Z80 routine at 0xFD0E):
+        #
+        # Per-iteration cost (excluding prologue/epilogue and B-wrap DEC C/JP):
+        # - carry clear branch: 90 t-states
+        # - carry set branch:  95..97 t-states depending on BIT 0,(HL) path
+        #   (use 96 as an unbiased mean).
+        #
+        # Therefore, average step cost is ~90 + 6*density.
         c_outer = C_repeat if C_repeat != 0x00 else 0x100
         iter_count = c_outer * 0x100
-        avg_iter_clock_units = 86.0 + (10.0 * density)
+        avg_iter_clock_units = 90.0 + (6.0 * density)
         total_clock_units = 63.0 + (float(iter_count) * avg_iter_clock_units) + (14.0 * float(c_outer)) + 40.0
         duration_s = total_clock_units / 3_500_000.0
 
-        active_edges = max(1.0, density * float(iter_count))
-        freq_hz = active_edges / (2.0 * max(duration_s, 1e-6))
+        slot_ticks = self._quantize_stream_slot_ticks(max(duration_s, 0.0))
+
+        # If D contains no set bits, the original routine never reaches OUT (0xFE),A:
+        # it is a timed silent segment. Preserve timing without emitting noise.
+        if density <= 0.0:
+            self._stream_pending_delay_ticks[0] += slot_ticks
+            self._stream_pending_delay_ticks[1] += slot_ticks
+            return int(total_clock_units)
+
+        # Model perceived latch "edge rate" as half of update rate.
+        active_updates = density * float(iter_count)
+        freq_hz = active_updates / (2.0 * max(duration_s, 1e-6))
         if freq_hz < 120.0:
             freq_hz = 120.0
 
         # Special-command path replaces the normal two-divider mixer loop.
         # Advance the other semantic channel so we don't create artificial overlap.
-        slot_ticks = self._quantize_stream_slot_ticks(max(duration_s, 0.0))
         self._stream_pending_delay_ticks[1] += slot_ticks
 
         # Keep noise conservative; raw Pyxel noise is perceptually denser than
