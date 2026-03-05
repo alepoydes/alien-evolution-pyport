@@ -212,7 +212,17 @@ class ZXSpectrumServiceLayer:
 
         self.border_color = value & 0x07
 
-    def emit_rom_beeper(self, period: int, ticks: int, tone: str = "S") -> None:
+    def emit_rom_beeper(
+        self,
+        period: int,
+        ticks: int,
+        tone: str = "S",
+        *,
+        volume: int = 5,
+        channel: int = 0,
+        source: str = "generic",
+        start_delay_ticks: int = 0,
+    ) -> None:
         """Emit semantic audio command for ROM 0x03B5 beeper call.
 
         Model:
@@ -233,8 +243,10 @@ class ZXSpectrumServiceLayer:
             tone=tone_u,
             freq_hz=freq,
             duration_s=duration,
-            volume=5,
-            channel=0,
+            volume=volume,
+            channel=channel,
+            source=source,
+            start_delay_ticks=start_delay_ticks,
         )
 
     def emit_audio(

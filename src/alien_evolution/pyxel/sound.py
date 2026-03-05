@@ -36,6 +36,27 @@ def _note_from_hz(freq: float) -> str:
     return f"{name}{octv}"
 
 
+def _noise_note_from_hz(freq: float) -> str:
+    """Map wide-band/noise rates into a bright Pyxel noise color range."""
+    if freq <= 0:
+        return "C0"
+
+    # Stream bit-noise in the original engine is mostly high-rate, cymbal-like
+    # texture. Keep noise mapping in a bright register and use a logarithmic
+    # compression to preserve pattern differences without collapsing everything
+    # to one top bin.
+    src_hz = max(120.0, float(freq))
+    src_lo = 120.0
+    src_hi = 20_000.0
+    t = (math.log(src_hz) - math.log(src_lo)) / (math.log(src_hi) - math.log(src_lo))
+    if t < 0.0:
+        t = 0.0
+    if t > 1.0:
+        t = 1.0
+    color_hz = 900.0 + (1100.0 * (t**0.6))
+    return _note_from_hz(color_hz)
+
+
 def _normalized_command(cmd: AudioCommand) -> AudioCommand | None:
     tone = (cmd.tone or "S").upper()
     if tone not in _AUDIO_TONES:
@@ -50,8 +71,11 @@ def _normalized_command(cmd: AudioCommand) -> AudioCommand | None:
     freq = float(cmd.freq_hz)
     if freq < 20.0:
         freq = 20.0
-    if freq > 5000.0:
-        freq = 5000.0
+    # For noise tone ("N"), keep a wider control-rate range so distinct
+    # bitstream patterns don't collapse into one identical color.
+    freq_max = 20_000.0 if tone == "N" else 5000.0
+    if freq > freq_max:
+        freq = freq_max
 
     volume = max(0, min(7, int(cmd.volume)))
     channel = max(0, min(3, int(cmd.channel)))
@@ -89,13 +113,16 @@ def _sound_set_from_command(
         volumes = "0"
         effects = "N"
     else:
-        note = _note_from_hz(cmd.freq_hz)
+        note = _noise_note_from_hz(cmd.freq_hz) if cmd.tone == "N" else _note_from_hz(cmd.freq_hz)
         notes = note
         tones = cmd.tone
         volumes = str(cmd.volume)
         # For very short one-tick blips, a tiny fade helps avoid hard clicks and also
         # subjectively matches the "pip" character of Spectrum beeper output.
-        effects = "F" if ticks <= 2 else "N"
+        #
+        # For noise, keep a fade too: raw Pyxel noise is fuller than Spectrum
+        # beeper hash and otherwise masks pitched cues.
+        effects = "F" if (ticks <= 2 or cmd.tone == "N") else "N"
 
     pyxel.sounds[slot].set(
         notes=notes,

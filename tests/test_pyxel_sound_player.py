@@ -5,7 +5,13 @@ import unittest
 from unittest.mock import patch
 
 from alien_evolution.alienevolution.logic import AlienEvolutionPort, ForcedInterpreterAbort
-from alien_evolution.pyxel.sound import PyxelAudioPlayer, _note_from_hz, _sound_set_from_command
+from alien_evolution.pyxel.sound import (
+    PyxelAudioPlayer,
+    _noise_note_from_hz,
+    _normalized_command,
+    _note_from_hz,
+    _sound_set_from_command,
+)
 from alien_evolution.zx.pointers import BlockPtr
 from alien_evolution.zx.runtime import AudioCommand
 
@@ -20,6 +26,40 @@ class PyxelSoundPlayerTests(unittest.TestCase):
         self.assertEqual(_note_from_hz(440.0), "A2")
         self.assertEqual(_note_from_hz(340.187), "F2")
         self.assertEqual(_note_from_hz(1760.0), "A4")
+
+    def test_noise_note_from_hz_compresses_ultrasonic_range(self) -> None:
+        self.assertEqual(_noise_note_from_hz(2200.0), "A4")
+        self.assertEqual(_noise_note_from_hz(10000.0), "B4")
+        self.assertEqual(_noise_note_from_hz(120.0), "A#3")
+
+    def test_normalized_noise_command_keeps_wider_control_rate(self) -> None:
+        noise_cmd = _normalized_command(
+            AudioCommand(
+                tone="N",
+                freq_hz=18000.0,
+                duration_s=0.1,
+                volume=5,
+                channel=0,
+                source="generic",
+            )
+        )
+        self.assertIsNotNone(noise_cmd)
+        assert noise_cmd is not None
+        self.assertEqual(noise_cmd.freq_hz, 18000.0)
+
+        tonal_cmd = _normalized_command(
+            AudioCommand(
+                tone="S",
+                freq_hz=18000.0,
+                duration_s=0.1,
+                volume=5,
+                channel=0,
+                source="generic",
+            )
+        )
+        self.assertIsNotNone(tonal_cmd)
+        assert tonal_cmd is not None
+        self.assertEqual(tonal_cmd.freq_hz, 5000.0)
 
     def test_audio_command_normalizes_negative_start_delay_ticks(self) -> None:
         cmd = AudioCommand(
@@ -318,6 +358,34 @@ class PyxelSoundPlayerTests(unittest.TestCase):
 
         self.assertEqual(fake_pyxel.sounds[0].calls[-1]["speed"], 255)
 
+    def test_sound_set_uses_noise_color_note_mapping(self) -> None:
+        class _FakeSound:
+            def __init__(self) -> None:
+                self.calls: list[dict[str, object]] = []
+
+            def set(self, **kwargs) -> None:
+                self.calls.append(kwargs)
+
+        class _FakePyxel:
+            def __init__(self) -> None:
+                self.sounds = [_FakeSound()]
+
+        fake_pyxel = _FakePyxel()
+        cmd = AudioCommand(
+            tone="N",
+            freq_hz=2200.0,
+            duration_s=0.1,
+            volume=5,
+            channel=0,
+            source="generic",
+        )
+
+        with patch.dict(sys.modules, {"pyxel": fake_pyxel}):
+            _sound_set_from_command(0, cmd)
+
+        self.assertEqual(fake_pyxel.sounds[0].calls[-1]["notes"], _noise_note_from_hz(2200.0))
+        self.assertEqual(fake_pyxel.sounds[0].calls[-1]["effects"], "F")
+
     def test_runtime_marks_stream_semantic_mix_as_stream_music(self) -> None:
         runtime = AlienEvolutionPort()
         runtime._audio_commands.clear()
@@ -331,6 +399,73 @@ class PyxelSoundPlayerTests(unittest.TestCase):
         self.assertGreater(timing_cost, 0)
         self.assertGreaterEqual(len(runtime._audio_commands), 1)
         self.assertTrue(all(cmd.source == "stream_music" for cmd in runtime._audio_commands))
+
+    def test_bitstream_noise_frequency_tracks_pattern_density(self) -> None:
+        runtime = AlienEvolutionPort()
+        captured: list[float] = []
+        orig_emit_audio = runtime.emit_audio
+
+        def _capture_emit_audio(**kwargs) -> None:
+            captured.append(float(kwargs["freq_hz"]))
+            orig_emit_audio(**kwargs)
+
+        runtime.emit_audio = _capture_emit_audio  # type: ignore[assignment]
+
+        runtime.bitstream_pulse_generator(C_repeat=0x20, D_bits=0x01)
+        runtime.bitstream_pulse_generator(C_repeat=0x20, D_bits=0x29)
+        runtime.bitstream_pulse_generator(C_repeat=0x20, D_bits=0xFF)
+
+        self.assertEqual(len(captured), 3)
+        self.assertLess(captured[0], captured[1])
+        self.assertLess(captured[1], captured[2])
+        self.assertGreater(captured[2], 2200.0)
+
+    def test_bitstream_noise_consumes_pending_special_delay_ticks(self) -> None:
+        runtime = AlienEvolutionPort()
+        runtime._stream_pending_delay_ticks = [5, 0, 0]
+        runtime._audio_commands.clear()
+
+        runtime.bitstream_pulse_generator(C_repeat=0x20, D_bits=0x29)
+
+        self.assertEqual(len(runtime._audio_commands), 1)
+        self.assertEqual(runtime._audio_commands[0].start_delay_ticks, 5)
+        self.assertEqual(runtime._audio_commands[0].source, "stream_special")
+        self.assertLessEqual(runtime._audio_commands[0].volume, 3)
+        self.assertEqual(runtime._stream_pending_delay_ticks[0], 0)
+        self.assertGreater(runtime._stream_pending_delay_ticks[1], 0)
+
+    def test_pre_delay_calibration_advances_both_stream_channels(self) -> None:
+        runtime = AlienEvolutionPort()
+        runtime._stream_pending_delay_ticks = [0, 0, 0]
+
+        timing = runtime.pre_delay_calibration_helper(C_wait=0x20)
+
+        self.assertGreater(timing, 0)
+        self.assertGreater(runtime._stream_pending_delay_ticks[0], 0)
+        self.assertEqual(runtime._stream_pending_delay_ticks[0], runtime._stream_pending_delay_ticks[1])
+
+    def test_special_dispatcher_noise_marks_stream_special_source(self) -> None:
+        runtime = AlienEvolutionPort()
+        runtime._audio_commands.clear()
+        runtime.var_stream_cmd_byte_1 = 0x29
+
+        runtime.special_command_dispatcher(A_cmd=0xFF)
+
+        emitted_noise = [cmd for cmd in runtime._audio_commands if cmd.tone == "N"]
+        self.assertEqual(len(emitted_noise), 1)
+        self.assertEqual(emitted_noise[0].source, "stream_special")
+
+    def test_stream_semantic_mix_with_no_toggles_advances_channel_timeline(self) -> None:
+        runtime = AlienEvolutionPort()
+        runtime._audio_commands.clear()
+        runtime._stream_pending_delay_ticks = [0, 0, 0]
+
+        timing = runtime._emit_stream_semantic_mix(iterations=256, fast_wraps=0, slow_wraps=0)
+
+        self.assertGreater(timing, 0)
+        self.assertEqual(len(runtime._audio_commands), 0)
+        self.assertGreater(runtime._stream_pending_delay_ticks[0], 0)
+        self.assertEqual(runtime._stream_pending_delay_ticks[0], runtime._stream_pending_delay_ticks[1])
 
     def test_stream_semantic_mix_emits_nonzero_start_delay_after_silence(self) -> None:
         runtime = AlienEvolutionPort()
