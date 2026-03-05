@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+import sys
 import unittest
+from unittest.mock import patch
 
 from alien_evolution.alienevolution.logic import AlienEvolutionPort, ForcedInterpreterAbort
-from alien_evolution.pyxel.sound import PyxelAudioPlayer, _note_from_hz
+from alien_evolution.pyxel.sound import PyxelAudioPlayer, _note_from_hz, _sound_set_from_command
 from alien_evolution.zx.pointers import BlockPtr
 from alien_evolution.zx.runtime import AudioCommand
 
@@ -242,6 +244,79 @@ class PyxelSoundPlayerTests(unittest.TestCase):
         self.assertEqual(len(player._queues[0]), 1)
         self.assertEqual(player._queues[0][0].cmd.volume, 6)
         self.assertEqual(player._queues[0][0].ticks, 30)
+
+    def test_stream_music_merge_splits_when_ticks_exceed_pyxel_limit(self) -> None:
+        player = PyxelAudioPlayer()
+        player.submit(
+            tuple(
+                AudioCommand(
+                    tone="S",
+                    freq_hz=440.0,
+                    duration_s=0.1,
+                    volume=5,
+                    channel=0,
+                    source="stream_music",
+                )
+                for _ in range(30)
+            )
+        )
+
+        ticks = _queue_ticks(player, 0)
+        self.assertEqual(sum(ticks), 360)
+        self.assertTrue(all(tick <= 255 for tick in ticks))
+        self.assertGreater(len(ticks), 1)
+
+    def test_start_delay_splits_rest_segments_at_pyxel_speed_limit(self) -> None:
+        player = PyxelAudioPlayer()
+        player.submit(
+            (
+                AudioCommand(
+                    tone="S",
+                    freq_hz=440.0,
+                    duration_s=0.1,
+                    volume=5,
+                    channel=0,
+                    source="stream_music",
+                    start_delay_ticks=400,
+                ),
+            )
+        )
+
+        self.assertEqual(len(player._queues[0]), 3)
+        self.assertTrue(player._queues[0][0].is_rest)
+        self.assertTrue(player._queues[0][1].is_rest)
+        self.assertFalse(player._queues[0][2].is_rest)
+
+        rest_ticks = [player._queues[0][0].ticks, player._queues[0][1].ticks]
+        self.assertEqual(sum(rest_ticks), 400)
+        self.assertTrue(all(tick <= 255 for tick in rest_ticks))
+
+    def test_sound_set_clamps_speed_above_pyxel_limit(self) -> None:
+        class _FakeSound:
+            def __init__(self) -> None:
+                self.calls: list[dict[str, object]] = []
+
+            def set(self, **kwargs) -> None:
+                self.calls.append(kwargs)
+
+        class _FakePyxel:
+            def __init__(self) -> None:
+                self.sounds = [_FakeSound()]
+
+        fake_pyxel = _FakePyxel()
+        cmd = AudioCommand(
+            tone="S",
+            freq_hz=440.0,
+            duration_s=0.1,
+            volume=5,
+            channel=0,
+            source="stream_music",
+        )
+
+        with patch.dict(sys.modules, {"pyxel": fake_pyxel}):
+            _sound_set_from_command(0, cmd, speed_ticks=999)
+
+        self.assertEqual(fake_pyxel.sounds[0].calls[-1]["speed"], 255)
 
     def test_runtime_marks_stream_semantic_mix_as_stream_music(self) -> None:
         runtime = AlienEvolutionPort()

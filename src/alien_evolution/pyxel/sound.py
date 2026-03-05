@@ -9,6 +9,8 @@ from ..zx.runtime import AudioCommand
 
 _AUDIO_TONES = ("S", "T", "P", "N")
 _A2_REFERENCE_HZ = 429.89
+# Pyxel Sound.speed is documented as 1..255.
+_PYXEL_SOUND_SPEED_MAX = 255
 
 
 @dataclass(slots=True)
@@ -77,6 +79,8 @@ def _sound_set_from_command(
     import pyxel
 
     ticks = max(1, int(speed_ticks) if speed_ticks is not None else int(round(cmd.duration_s * 120.0)))
+    if ticks > _PYXEL_SOUND_SPEED_MAX:
+        ticks = _PYXEL_SOUND_SPEED_MAX
     speed = ticks
 
     if rest:
@@ -155,6 +159,58 @@ class PyxelAudioPlayer:
         self._tick_remainder = [0.0, 0.0, 0.0, 0.0]
 
     @staticmethod
+    def _split_ticks(ticks: int) -> list[int]:
+        """Split a duration in 120Hz ticks into Pyxel-supported chunks."""
+        remaining = max(0, int(ticks))
+        if remaining <= 0:
+            return []
+        out: list[int] = []
+        while remaining > 0:
+            chunk = remaining if remaining <= _PYXEL_SOUND_SPEED_MAX else _PYXEL_SOUND_SPEED_MAX
+            out.append(chunk)
+            remaining -= chunk
+        return out
+
+    def _append_queued(
+        self,
+        queue: deque[_QueuedAudioCommand],
+        *,
+        cmd: AudioCommand,
+        ticks: int,
+        is_rest: bool,
+        allow_merge: bool,
+    ) -> None:
+        """Append a queued command, splitting long segments and respecting merge rules."""
+        parts = self._split_ticks(ticks)
+        if not parts:
+            return
+
+        for part_ticks in parts:
+            if (
+                allow_merge
+                and queue
+                and (not queue[-1].is_rest)
+                and (not is_rest)
+                and self._commands_match_for_merge(queue[-1].cmd, cmd)
+            ):
+                merged = queue[-1]
+                if merged.ticks + part_ticks <= _PYXEL_SOUND_SPEED_MAX:
+                    merged.ticks += part_ticks
+                    if merged.cmd.source == "stream_music" and cmd.source == "stream_music":
+                        merged.cmd = AudioCommand(
+                            tone=merged.cmd.tone,
+                            freq_hz=merged.cmd.freq_hz,
+                            duration_s=merged.cmd.duration_s + cmd.duration_s,
+                            volume=max(merged.cmd.volume, cmd.volume),
+                            channel=merged.cmd.channel,
+                            source=merged.cmd.source,
+                            start_delay_ticks=merged.cmd.start_delay_ticks,
+                        )
+                    continue
+
+            queue.append(_QueuedAudioCommand(cmd=cmd, ticks=part_ticks, is_rest=is_rest))
+
+    @staticmethod
     def _round_positive_with_remainder(raw_value: float) -> tuple[int, float]:
         rounded = int(math.floor(raw_value + 0.5))
         if rounded < 1:
@@ -211,23 +267,22 @@ class PyxelAudioPlayer:
             delay_ticks = max(0, int(cmd.start_delay_ticks))
             queue = self._queues[cmd.channel]
             if delay_ticks > 0:
-                if queue and queue[-1].is_rest:
-                    queue[-1].ticks += delay_ticks
-                else:
-                    queue.append(
-                        _QueuedAudioCommand(
-                            cmd=AudioCommand(
-                                tone="N",
-                                freq_hz=20.0,
-                                duration_s=float(delay_ticks) / 120.0,
-                                volume=0,
-                                channel=cmd.channel,
-                                source=cmd.source,
-                            ),
-                            ticks=delay_ticks,
-                            is_rest=True,
-                        )
-                    )
+                rest_cmd = AudioCommand(
+                    tone="N",
+                    freq_hz=20.0,
+                    duration_s=float(delay_ticks) / 120.0,
+                    volume=0,
+                    channel=cmd.channel,
+                    source=cmd.source,
+                )
+
+                if queue and queue[-1].is_rest and (queue[-1].ticks < _PYXEL_SOUND_SPEED_MAX):
+                    take = min(delay_ticks, _PYXEL_SOUND_SPEED_MAX - queue[-1].ticks)
+                    queue[-1].ticks += take
+                    delay_ticks -= take
+                if delay_ticks > 0:
+                    for part_ticks in self._split_ticks(delay_ticks):
+                        queue.append(_QueuedAudioCommand(cmd=rest_cmd, ticks=part_ticks, is_rest=True))
                 cmd = AudioCommand(
                     tone=cmd.tone,
                     freq_hz=cmd.freq_hz,
@@ -237,21 +292,7 @@ class PyxelAudioPlayer:
                     source=cmd.source,
                     start_delay_ticks=0,
                 )
-            if queue and (not queue[-1].is_rest) and self._commands_match_for_merge(queue[-1].cmd, cmd):
-                merged = queue[-1]
-                merged.ticks += ticks
-                if merged.cmd.source == "stream_music" and cmd.source == "stream_music":
-                    merged.cmd = AudioCommand(
-                        tone=merged.cmd.tone,
-                        freq_hz=merged.cmd.freq_hz,
-                        duration_s=merged.cmd.duration_s + cmd.duration_s,
-                        volume=max(merged.cmd.volume, cmd.volume),
-                        channel=merged.cmd.channel,
-                        source=merged.cmd.source,
-                        start_delay_ticks=merged.cmd.start_delay_ticks,
-                    )
-            else:
-                queue.append(_QueuedAudioCommand(cmd=cmd, ticks=ticks))
+            self._append_queued(queue, cmd=cmd, ticks=ticks, is_rest=False, allow_merge=True)
 
     def update(self) -> None:
         import pyxel
