@@ -19,6 +19,8 @@ class _FakePyxel:
     KEY_A = 8
     KEY_S = 9
     KEY_D = 10
+    KEY_LSHIFT = 11
+    KEY_RSHIFT = 12
 
     GAMEPAD1_BUTTON_DPAD_RIGHT = 21
     GAMEPAD1_BUTTON_DPAD_LEFT = 22
@@ -38,7 +40,19 @@ class PyxelInputGamepadTests(unittest.TestCase):
     def _with_pyxel(self, fake: _FakePyxel, fn):
         with patch.dict(sys.modules, {"pyxel": fake}):
             pyxel_input._host_key_table = None
+            pyxel_input._WEB_KEYFIX_READY = None
             return fn()
+
+    def _with_web_key_state(self, fake: _FakePyxel, pressed_web_ids: set[str], fn):
+        def _web_key_down(*codes: str) -> bool:
+            return any(code in pressed_web_ids for code in codes)
+
+        with patch.dict(sys.modules, {"pyxel": fake}):
+            with patch.object(pyxel_input, "_install_web_keyfix", return_value=True):
+                with patch.object(pyxel_input, "_web_key_down", side_effect=_web_key_down):
+                    pyxel_input._host_key_table = None
+                    pyxel_input._WEB_KEYFIX_READY = True
+                    return fn()
 
     def test_gamepad_a_sets_kempston_fire(self) -> None:
         fake = _FakePyxel(pressed={_FakePyxel.GAMEPAD1_BUTTON_A})
@@ -102,6 +116,37 @@ class PyxelInputGamepadTests(unittest.TestCase):
 
         row_7ffe = ZX_KEYBOARD_ROW_INDEX_BY_PORT[0x7FFE]
         self.assertEqual((rows[row_7ffe] >> 1) & 0x01, 0x00)  # SYMBOL SHIFT via virtual B
+
+    def test_web_state_ignores_stuck_pyxel_wasd(self) -> None:
+        fake = _FakePyxel(pressed={_FakePyxel.KEY_W, _FakePyxel.KEY_SPACE})
+        value = self._with_web_key_state(fake, set(), pyxel_input.joy_kempston)
+        self.assertEqual(value & 0x18, 0x00)
+
+    def test_web_state_drives_wasd_when_pyxel_reports_up(self) -> None:
+        fake = _FakePyxel(pressed=set())
+        value = self._with_web_key_state(fake, {"KeyW", "Space"}, pyxel_input.joy_kempston)
+        self.assertEqual(value & 0x18, 0x18)
+
+    def test_web_state_ignores_stuck_pyxel_shift(self) -> None:
+        fake = _FakePyxel(pressed={_FakePyxel.KEY_LSHIFT})
+        rows = self._with_web_key_state(fake, set(), pyxel_input.keyboard_rows)
+
+        row_fefe = ZX_KEYBOARD_ROW_INDEX_BY_PORT[0xFEFE]  # CAPS SHIFT Z X C V
+        self.assertEqual((rows[row_fefe] >> 0) & 0x01, 0x01)  # CAPS SHIFT is not pressed
+
+    def test_web_state_ignores_stuck_pyxel_e_for_virtual_b(self) -> None:
+        fake = _FakePyxel(pressed={_FakePyxel.KEY_E})
+        rows = self._with_web_key_state(fake, set(), pyxel_input.keyboard_rows)
+
+        row_7ffe = ZX_KEYBOARD_ROW_INDEX_BY_PORT[0x7FFE]
+        self.assertEqual((rows[row_7ffe] >> 1) & 0x01, 0x01)  # SYMBOL SHIFT remains released
+
+    def test_web_state_drives_virtual_b_from_key_e(self) -> None:
+        fake = _FakePyxel(pressed=set())
+        rows = self._with_web_key_state(fake, {"KeyE"}, pyxel_input.keyboard_rows)
+
+        row_7ffe = ZX_KEYBOARD_ROW_INDEX_BY_PORT[0x7FFE]
+        self.assertEqual((rows[row_7ffe] >> 1) & 0x01, 0x00)  # SYMBOL SHIFT via web E
 
 
 if __name__ == "__main__":
