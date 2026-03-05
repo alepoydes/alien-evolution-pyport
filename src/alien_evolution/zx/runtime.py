@@ -270,7 +270,11 @@ class ZXSpectrumServiceLayer:
         source_s = str(source or "generic")
         delay_ticks = max(0, int(start_delay_ticks))
 
-        if self._audio_commands and delay_ticks == 0:
+        # Preserve command boundaries for stream-special primitives: these are
+        # authored as explicit timed segments (especially FD0E noise hashes),
+        # and merging adjacent slices changes the perceived articulation.
+        merge_allowed = (delay_ticks == 0) and (source_s != "stream_special")
+        if self._audio_commands and merge_allowed:
             last = self._audio_commands[-1]
             if (
                 last.tone == tone_u

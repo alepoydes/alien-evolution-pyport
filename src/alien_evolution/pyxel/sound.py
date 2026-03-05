@@ -53,8 +53,17 @@ def _noise_note_from_hz(freq: float) -> str:
         t = 0.0
     if t > 1.0:
         t = 1.0
-    color_hz = 900.0 + (1100.0 * (t**0.6))
+    # Keep stream-special noise in the upper register: on real Spectrum this
+    # path toggles the beeper latch at ~2.5..18 kHz (preset-A uses D=01/29/FF),
+    # which is perceived as bright cymbal-like hash rather than low rumble.
+    color_hz = 1400.0 + (600.0 * (t**0.6))
     return _note_from_hz(color_hz)
+
+
+def _stream_special_noise_note_from_hz(freq: float) -> str:
+    """Bright bins for FD0E stream-special beeper hash."""
+    f = max(0.0, float(freq))
+    return "A#4" if f < 5000.0 else "B4"
 
 
 def _normalized_command(cmd: AudioCommand) -> AudioCommand | None:
@@ -113,7 +122,15 @@ def _sound_set_from_command(
         volumes = "0"
         effects = "N"
     else:
-        note = _noise_note_from_hz(cmd.freq_hz) if cmd.tone == "N" else _note_from_hz(cmd.freq_hz)
+        is_stream_special_noise = cmd.tone == "N" and cmd.source == "stream_special"
+        if cmd.tone == "N":
+            note = (
+                _stream_special_noise_note_from_hz(cmd.freq_hz)
+                if is_stream_special_noise
+                else _noise_note_from_hz(cmd.freq_hz)
+            )
+        else:
+            note = _note_from_hz(cmd.freq_hz)
         notes = note
         tones = cmd.tone
         volumes = str(cmd.volume)
@@ -122,7 +139,10 @@ def _sound_set_from_command(
         #
         # For noise, keep a fade too: raw Pyxel noise is fuller than Spectrum
         # beeper hash and otherwise masks pitched cues.
-        effects = "F" if (ticks <= 2 or cmd.tone == "N") else "N"
+        if is_stream_special_noise:
+            effects = "N"
+        else:
+            effects = "F" if (ticks <= 2 or cmd.tone == "N") else "N"
 
     pyxel.sounds[slot].set(
         notes=notes,

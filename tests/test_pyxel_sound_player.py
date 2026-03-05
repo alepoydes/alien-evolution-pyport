@@ -11,6 +11,7 @@ from alien_evolution.pyxel.sound import (
     _normalized_command,
     _note_from_hz,
     _sound_set_from_command,
+    _stream_special_noise_note_from_hz,
 )
 from alien_evolution.zx.pointers import BlockPtr
 from alien_evolution.zx.runtime import AudioCommand
@@ -28,9 +29,14 @@ class PyxelSoundPlayerTests(unittest.TestCase):
         self.assertEqual(_note_from_hz(1760.0), "A4")
 
     def test_noise_note_from_hz_compresses_ultrasonic_range(self) -> None:
-        self.assertEqual(_noise_note_from_hz(2200.0), "A4")
+        self.assertEqual(_noise_note_from_hz(2200.0), "A#4")
         self.assertEqual(_noise_note_from_hz(10000.0), "B4")
-        self.assertEqual(_noise_note_from_hz(120.0), "A#3")
+        self.assertEqual(_noise_note_from_hz(120.0), "F4")
+
+    def test_stream_special_noise_note_stays_in_bright_bins(self) -> None:
+        self.assertEqual(_stream_special_noise_note_from_hz(2502.0), "A#4")
+        self.assertEqual(_stream_special_noise_note_from_hz(7299.0), "B4")
+        self.assertEqual(_stream_special_noise_note_from_hz(18199.0), "B4")
 
     def test_normalized_noise_command_keeps_wider_control_rate(self) -> None:
         noise_cmd = _normalized_command(
@@ -97,6 +103,31 @@ class PyxelSoundPlayerTests(unittest.TestCase):
 
         self.assertEqual(len(runtime._audio_commands), 2)
         self.assertEqual(runtime._audio_commands[1].start_delay_ticks, 3)
+
+    def test_emit_audio_does_not_merge_stream_special_segments(self) -> None:
+        runtime = AlienEvolutionPort()
+        runtime._audio_commands.clear()
+
+        runtime.emit_audio(
+            tone="N",
+            freq_hz=7299.0,
+            duration_s=0.026,
+            volume=2,
+            channel=0,
+            source="stream_special",
+        )
+        runtime.emit_audio(
+            tone="N",
+            freq_hz=7299.0,
+            duration_s=0.026,
+            volume=2,
+            channel=0,
+            source="stream_special",
+        )
+
+        self.assertEqual(len(runtime._audio_commands), 2)
+        self.assertAlmostEqual(runtime._audio_commands[0].duration_s, 0.026, places=6)
+        self.assertAlmostEqual(runtime._audio_commands[1].duration_s, 0.026, places=6)
 
     def test_stream_music_uses_120hz_quantization(self) -> None:
         player = PyxelAudioPlayer()
@@ -385,6 +416,34 @@ class PyxelSoundPlayerTests(unittest.TestCase):
 
         self.assertEqual(fake_pyxel.sounds[0].calls[-1]["notes"], _noise_note_from_hz(2200.0))
         self.assertEqual(fake_pyxel.sounds[0].calls[-1]["effects"], "F")
+
+    def test_sound_set_uses_bright_profile_for_stream_special_noise(self) -> None:
+        class _FakeSound:
+            def __init__(self) -> None:
+                self.calls: list[dict[str, object]] = []
+
+            def set(self, **kwargs) -> None:
+                self.calls.append(kwargs)
+
+        class _FakePyxel:
+            def __init__(self) -> None:
+                self.sounds = [_FakeSound()]
+
+        fake_pyxel = _FakePyxel()
+        cmd = AudioCommand(
+            tone="N",
+            freq_hz=2502.0,
+            duration_s=0.1,
+            volume=2,
+            channel=0,
+            source="stream_special",
+        )
+
+        with patch.dict(sys.modules, {"pyxel": fake_pyxel}):
+            _sound_set_from_command(0, cmd)
+
+        self.assertEqual(fake_pyxel.sounds[0].calls[-1]["notes"], "A#4")
+        self.assertEqual(fake_pyxel.sounds[0].calls[-1]["effects"], "N")
 
     def test_runtime_marks_stream_semantic_mix_as_stream_music(self) -> None:
         runtime = AlienEvolutionPort()
