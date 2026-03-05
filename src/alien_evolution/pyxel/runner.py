@@ -400,6 +400,14 @@ def run_pyxel_game(
                 pyxel.text(text_x, text_y + idx * row_height, message, 10)
         redraw_required = False
 
-    pyxel.init(width, height, title=title, fps=fps, display_scale=display_scale)
+    quit_key = getattr(pyxel, "KEY_NONE", None) if sys.platform == "emscripten" else None
+    pyxel.init(
+        width,
+        height,
+        title=title,
+        fps=fps,
+        quit_key=quit_key,
+        display_scale=display_scale,
+    )
     apply_zx_palette()
     pyxel.run(_update, _draw)
