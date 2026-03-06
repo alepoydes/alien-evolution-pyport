@@ -81,12 +81,15 @@ Default controls:
 - `W/A/S/D`: move
 - `Space`: action/fire
 - `Enter`: cycle weapon mode
+- Desktop cheats: type `lvl1`, `lvl2`, or `lvl3`, then pause for about 1 second to apply
 
 Quality-of-life hotkeys:
 - `F5`: quick-save
 - `F9`: quick-load
 - `F8`: rollback
 - `F7`: manual checkpoint
+
+Cheat commands are disabled in the web build.
 
 ## CLI and Automation Docs
 

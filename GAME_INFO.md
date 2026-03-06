@@ -36,6 +36,11 @@ Port convenience hotkeys (optional, but useful for practice):
 - **F9** - quick load
 - **F10** - reset (back to title)
 
+Desktop-only practice cheats:
+
+- Type **`lvl1`**, **`lvl2`**, or **`lvl3`**, then stop typing for about **1 second** to jump to that level's normal pre-game splash.
+- Cheats are **disabled in the web version**.
+
 ---
 
 ## The HUD

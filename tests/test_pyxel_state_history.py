@@ -3,10 +3,12 @@ from __future__ import annotations
 import unittest
 
 from alien_evolution.pyxel.runner import (
+    CheatCommandBuffer,
     DEFAULT_QUICKSAVE_FILENAME,
     DEFAULT_HISTORY_INTERVAL_HOST_FRAMES,
     RuntimeStateHistory,
     ScreenMessageQueue,
+    _maybe_apply_runtime_cheat,
 )
 
 
@@ -24,6 +26,16 @@ class _DummyStatefulRuntime:
 class _DummyAutosaveRuntime(_DummyStatefulRuntime):
     def save_autosave_state(self) -> dict[str, object]:
         return {"value": self.value, "compact": True}
+
+
+class _DummyCheatRuntime:
+    def __init__(self) -> None:
+        self.calls: list[tuple[str, ...]] = []
+
+    def apply_cheat_sequence(self, symbols) -> bool:
+        typed = tuple(str(symbol) for symbol in symbols)
+        self.calls.append(typed)
+        return "".join(typed) == "lvl1"
 
 
 class PyxelStateHistoryTests(unittest.TestCase):
@@ -83,6 +95,39 @@ class ScreenMessageQueueTests(unittest.TestCase):
 
         queue.prune(host_frame_index=4)
         self.assertEqual(queue.messages, ("newest",))
+
+
+class CheatCommandBufferTests(unittest.TestCase):
+    def test_buffer_dispatches_after_idle_timeout(self) -> None:
+        buffer = CheatCommandBuffer(inactivity_host_frames=5)
+
+        buffer.push(("l", "v", "l", "1"), host_frame_index=10)
+        self.assertIsNone(buffer.poll_ready(host_frame_index=14))
+        self.assertEqual(buffer.poll_ready(host_frame_index=15), ("l", "v", "l", "1"))
+
+    def test_dispatch_clears_buffer(self) -> None:
+        buffer = CheatCommandBuffer(inactivity_host_frames=3)
+
+        buffer.push(("l", "v", "l", "1"), host_frame_index=0)
+        self.assertEqual(buffer.poll_ready(host_frame_index=3), ("l", "v", "l", "1"))
+        self.assertEqual(buffer.pending_text, "")
+        self.assertIsNone(buffer.poll_ready(host_frame_index=10))
+
+    def test_disabled_mode_never_dispatches(self) -> None:
+        runtime = _DummyCheatRuntime()
+        buffer = CheatCommandBuffer(inactivity_host_frames=1)
+
+        buffer.push(("l", "v", "l", "1"), host_frame_index=0)
+        result = _maybe_apply_runtime_cheat(
+            runtime,
+            command_buffer=buffer,
+            typed_chars=(),
+            host_frame_index=1,
+            cheats_enabled=False,
+        )
+
+        self.assertIsNone(result)
+        self.assertEqual(runtime.calls, [])
 
 if __name__ == "__main__":
     unittest.main()

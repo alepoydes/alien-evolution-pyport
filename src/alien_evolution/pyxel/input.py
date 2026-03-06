@@ -196,6 +196,7 @@ def joy_kempston() -> int:
 
 
 _host_key_table: dict[int, str] | None = None
+_host_cheat_key_table: dict[int, str] | None = None
 
 
 def _build_host_key_table() -> dict[int, str]:
@@ -223,6 +224,46 @@ def _build_host_key_table() -> dict[int, str]:
             t[getattr(pyxel, name)] = ch
 
     return t
+
+
+def _build_host_cheat_key_table() -> dict[int, str]:
+    import pyxel
+
+    t: dict[int, str] = {}
+
+    for c in range(ord("A"), ord("Z") + 1):
+        name = f"KEY_{chr(c)}"
+        if hasattr(pyxel, name):
+            t[getattr(pyxel, name)] = chr(c + 32)
+
+    for d in "0123456789":
+        name = f"KEY_{d}"
+        if hasattr(pyxel, name):
+            t[getattr(pyxel, name)] = d
+
+    return t
+
+
+def typed_command_chars() -> tuple[str, ...]:
+    """Return newly pressed desktop command chars for cheat buffering."""
+    if sys.platform == "emscripten":
+        return ()
+
+    import pyxel
+
+    btnp = getattr(pyxel, "btnp", None)
+    if not callable(btnp):
+        return ()
+
+    global _host_cheat_key_table
+    if _host_cheat_key_table is None:
+        _host_cheat_key_table = _build_host_cheat_key_table()
+
+    pressed: list[str] = []
+    for key_code, ch in _host_cheat_key_table.items():
+        if bool(btnp(key_code)):
+            pressed.append(ch)
+    return tuple(pressed)
 
 
 def keyboard_rows() -> tuple[int, ...]:

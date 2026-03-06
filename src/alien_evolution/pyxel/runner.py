@@ -11,7 +11,7 @@ from ..fileio.stateio import load_state_json, save_state_json
 from ..zx.runtime import FrameStepRuntime, StepOutput, StepTiming, ZXSpectrumServiceLayer
 from ..zx.screen import ZX_ATTR_BYTES, ZX_BITMAP_BYTES, ZX_SCREEN_H, ZX_SCREEN_W
 from ..zx.state import StatefulRuntime, ensure_stateful_runtime
-from .input import read_frame_input
+from .input import read_frame_input, typed_command_chars
 from .screen import apply_zx_palette, blit_zx_screen_to_pyxel
 from .sound import PyxelAudioPlayer
 
@@ -64,6 +64,65 @@ class ScreenMessageQueue:
         frame = int(host_frame_index)
         while self._messages and self._messages[0].expires_at_host_frame <= frame:
             self._messages.popleft()
+
+
+class CheatCommandBuffer:
+    def __init__(self, *, inactivity_host_frames: int) -> None:
+        self.inactivity_host_frames = max(1, int(inactivity_host_frames))
+        self._chars: list[str] = []
+        self._last_input_host_frame: int | None = None
+
+    @property
+    def pending_text(self) -> str:
+        return "".join(self._chars)
+
+    def push(self, chars: Sequence[str], *, host_frame_index: int) -> None:
+        pushed = False
+        for ch in chars:
+            ch_s = str(ch)
+            if len(ch_s) != 1:
+                continue
+            self._chars.append(ch_s)
+            pushed = True
+        if pushed:
+            self._last_input_host_frame = int(host_frame_index)
+
+    def poll_ready(self, *, host_frame_index: int) -> tuple[str, ...] | None:
+        if not self._chars or self._last_input_host_frame is None:
+            return None
+        if (int(host_frame_index) - self._last_input_host_frame) < self.inactivity_host_frames:
+            return None
+        ready = tuple(self._chars)
+        self.clear()
+        return ready
+
+    def clear(self) -> None:
+        self._chars.clear()
+        self._last_input_host_frame = None
+
+
+def _maybe_apply_runtime_cheat(
+    runtime: object,
+    *,
+    command_buffer: CheatCommandBuffer | None,
+    typed_chars: Sequence[str],
+    host_frame_index: int,
+    cheats_enabled: bool,
+) -> str | None:
+    if not cheats_enabled or command_buffer is None:
+        return None
+
+    command_buffer.push(typed_chars, host_frame_index=host_frame_index)
+    ready_symbols = command_buffer.poll_ready(host_frame_index=host_frame_index)
+    if ready_symbols is None:
+        return None
+
+    apply_cheat = getattr(runtime, "apply_cheat_sequence", None)
+    if not callable(apply_cheat):
+        return None
+    if not bool(apply_cheat(ready_symbols)):
+        return None
+    return "".join(ready_symbols)
 
 
 class RuntimeStateHistory:
@@ -119,6 +178,7 @@ def run_pyxel_game(
     quicksave_path: Path | None = None,
     screen_message_ttl_seconds: float = DEFAULT_SCREEN_MESSAGE_TTL_SECONDS,
     dev_tools: bool = True,
+    cheats_enabled: bool = True,
 ) -> None:
     """Run a frame-step runtime in a Pyxel window."""
     import pyxel
@@ -174,6 +234,11 @@ def run_pyxel_game(
     max_elapsed_catchup_s = float(DEFAULT_MAX_ELAPSED_CATCHUP_SECONDS)
     last_update_clock_s = time.perf_counter()
     host_frame_accumulator = 0.0
+    cheat_command_buffer = (
+        CheatCommandBuffer(inactivity_host_frames=max(1, int(round(float(fps)))))
+        if cheats_enabled
+        else None
+    )
 
     def _refresh_snapshot_output() -> None:
         nonlocal last_output
@@ -322,7 +387,7 @@ def run_pyxel_game(
             redraw_required = True
 
     def _update() -> None:
-        nonlocal host_frame_index, last_output, pending_delay_frames, redraw_required
+        nonlocal host_frame_index, history, last_output, pending_delay_frames, redraw_required
         nonlocal last_update_clock_s, host_frame_accumulator
 
         now_s = time.perf_counter()
@@ -349,6 +414,27 @@ def run_pyxel_game(
             screen_messages.prune(host_frame_index=host_frame_index)
             if tuple(screen_messages.messages) != messages_before:
                 redraw_required = True
+
+        cheat_text = _maybe_apply_runtime_cheat(
+            runtime,
+            command_buffer=cheat_command_buffer,
+            typed_chars=typed_command_chars() if cheat_command_buffer is not None else (),
+            host_frame_index=host_frame_index,
+            cheats_enabled=cheats_enabled,
+        )
+        if cheat_text is not None:
+            pending_delay_frames = 0
+            _refresh_snapshot_output()
+            redraw_required = True
+            if stateful_runtime is not None and history_interval_host_frames > 0:
+                history = RuntimeStateHistory(
+                    interval_host_frames=history_interval_host_frames,
+                    max_checkpoints=history_max_checkpoints,
+                )
+                history.force_capture(stateful_runtime, host_frame_index=host_frame_index)
+            _push_screen_message(f"Cheat: {cheat_text}")
+            audio_player.update()
+            return
 
         remaining_host_frames = elapsed_host_frames
         if pending_delay_frames > 0:

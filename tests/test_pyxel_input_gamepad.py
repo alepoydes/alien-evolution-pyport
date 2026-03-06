@@ -29,17 +29,22 @@ class _FakePyxel:
     GAMEPAD1_BUTTON_A = 25
     GAMEPAD1_BUTTON_B = 26
 
-    def __init__(self, pressed: set[int]) -> None:
+    def __init__(self, pressed: set[int], *, edge_pressed: set[int] | None = None) -> None:
         self._pressed = pressed
+        self._edge_pressed = pressed if edge_pressed is None else edge_pressed
 
     def btn(self, key: int) -> bool:
         return key in self._pressed
+
+    def btnp(self, key: int) -> bool:
+        return key in self._edge_pressed
 
 
 class PyxelInputGamepadTests(unittest.TestCase):
     def _with_pyxel(self, fake: _FakePyxel, fn):
         with patch.dict(sys.modules, {"pyxel": fake}):
             pyxel_input._host_key_table = None
+            pyxel_input._host_cheat_key_table = None
             pyxel_input._WEB_KEYFIX_READY = None
             return fn()
 
@@ -51,6 +56,7 @@ class PyxelInputGamepadTests(unittest.TestCase):
             with patch.object(pyxel_input, "_install_web_keyfix", return_value=True):
                 with patch.object(pyxel_input, "_web_key_down", side_effect=_web_key_down):
                     pyxel_input._host_key_table = None
+                    pyxel_input._host_cheat_key_table = None
                     pyxel_input._WEB_KEYFIX_READY = True
                     return fn()
 
@@ -147,6 +153,25 @@ class PyxelInputGamepadTests(unittest.TestCase):
 
         row_7ffe = ZX_KEYBOARD_ROW_INDEX_BY_PORT[0x7FFE]
         self.assertEqual((rows[row_7ffe] >> 1) & 0x01, 0x00)  # SYMBOL SHIFT via web E
+
+    def test_typed_command_chars_report_desktop_btnp_edges(self) -> None:
+        fake = _FakePyxel(
+            pressed={_FakePyxel.KEY_W, _FakePyxel.KEY_E, _FakePyxel.KEY_A},
+            edge_pressed={_FakePyxel.KEY_W, _FakePyxel.KEY_E},
+        )
+        chars = self._with_pyxel(fake, pyxel_input.typed_command_chars)
+        self.assertEqual(chars, ("e", "w"))
+
+    def test_typed_command_chars_ignore_held_keys_without_btnp_edge(self) -> None:
+        fake = _FakePyxel(pressed={_FakePyxel.KEY_W}, edge_pressed=set())
+        chars = self._with_pyxel(fake, pyxel_input.typed_command_chars)
+        self.assertEqual(chars, ())
+
+    def test_typed_command_chars_are_disabled_in_web_runtime(self) -> None:
+        fake = _FakePyxel(pressed={_FakePyxel.KEY_W}, edge_pressed={_FakePyxel.KEY_W})
+        with patch.object(pyxel_input.sys, "platform", "emscripten"):
+            chars = self._with_pyxel(fake, pyxel_input.typed_command_chars)
+        self.assertEqual(chars, ())
 
 
 if __name__ == "__main__":

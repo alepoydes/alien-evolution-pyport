@@ -23,4 +23,5 @@ def main() -> None:
         history_max_checkpoints=0,
         # Keep manual state hotkeys on desktop; disable in web builds.
         dev_tools=not is_web_runtime,
+        cheats_enabled=not is_web_runtime,
     )

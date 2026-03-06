@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass
-from typing import Any, Callable, Literal, cast
+from typing import Any, Callable, Literal, Sequence, cast
 
 from .blocks import (
     AlienEvolutionData,
@@ -496,6 +496,35 @@ class AlienEvolutionPort(StatefulManifestRuntime, AlienEvolutionData, ZXSpectrum
             if attr_name not in baseline.__dict__:
                 del self.__dict__[attr_name]
         self.__dict__.update(baseline.__dict__)
+
+    def apply_cheat_sequence(self, symbols: Sequence[str]) -> bool:
+        command = "".join(str(symbol) for symbol in symbols).lower()
+        level_index = {"lvl1": 0, "lvl2": 1, "lvl3": 2}.get(command)
+        if level_index is None:
+            return False
+        self._cheat_start_level(level_index)
+        return True
+
+    def _cheat_start_level(self, level_index: int) -> None:
+        idx = int(level_index)
+        if idx < 0 or idx > 2:
+            raise ValueError(f"Unsupported cheat level index: {level_index!r}")
+
+        self.reset()
+        self.gameplay_screen_setup()
+        if idx == 0:
+            self.fn_overlay_preset_selector()
+        self.var_active_map_mode = idx & 0xFF
+        self._fsm_prepare_gameplay_loop()
+        self._fsm_gameplay_ctx["initialized"] = True
+        self._fsm_gameplay_ctx["screen_setup_required"] = False
+        self._fsm_start_stream(
+            stream_a=BlockPtr(self.const_scenario_preset_a_stream_1, 0x0000),
+            stream_b=BlockPtr(self.const_scenario_preset_a_stream_2, 0x0000),
+            abort_on_keypress=True,
+            return_state=FSM_STATE_GAMEPLAY_MAIN_FRAME,
+        )
+        self._fsm_state = FSM_STATE_STREAM_INTERMISSION_FRAME
 
     def _state_reset_transient_runtime_state(self) -> None:
         self._audio_commands.clear()
