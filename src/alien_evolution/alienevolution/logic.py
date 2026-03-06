@@ -516,6 +516,8 @@ class AlienEvolutionPort(StatefulManifestRuntime, AlienEvolutionData, ZXSpectrum
             self.fn_overlay_preset_selector()
         self.var_active_map_mode = idx & 0xFF
         self._fsm_prepare_gameplay_loop()
+        self.var_runtime_objective_counter = 0x06
+        self.fn_hud_strip_painter()
         self._fsm_gameplay_ctx["initialized"] = True
         self._fsm_gameplay_ctx["screen_setup_required"] = False
         self._fsm_start_stream(

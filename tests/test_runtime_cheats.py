@@ -3,6 +3,7 @@ from __future__ import annotations
 import unittest
 
 from alien_evolution.alienevolution.logic import (
+    FSM_STATE_GAMEPLAY_TICK_STAGE_2_FRAME,
     FSM_STATE_GAMEPLAY_TICK_STAGE_1_FRAME,
     FSM_STATE_STREAM_INTERMISSION_FRAME,
     FSM_STATE_WAIT_KEYBOARD_RELEASE_FRAME,
@@ -39,6 +40,7 @@ class RuntimeCheatTests(unittest.TestCase):
                 self.assertEqual(runtime._fsm_state, FSM_STATE_STREAM_INTERMISSION_FRAME)
                 self.assertTrue(bool(runtime._fsm_gameplay_ctx["initialized"]))
                 self.assertFalse(bool(runtime._fsm_gameplay_ctx["screen_setup_required"]))
+                self.assertEqual(runtime.var_runtime_objective_counter & 0xFF, 0x06)
 
     def test_level_cheat_splash_release_enters_normal_gameplay_timing(self) -> None:
         runtime = AlienEvolutionPort()
@@ -54,6 +56,32 @@ class RuntimeCheatTests(unittest.TestCase):
         self.assertEqual(runtime._fsm_state, FSM_STATE_GAMEPLAY_TICK_STAGE_1_FRAME)
         self.assertEqual(int(gameplay_out.timing.delay_after_step_frames), 4)
         self.assertEqual(runtime.var_active_map_mode & 0xFF, 0x01)
+        self.assertEqual(runtime.var_runtime_objective_counter & 0xFF, 0x06)
+
+    def test_higher_level_cheats_do_not_immediately_enter_failure_path(self) -> None:
+        for command, expected_mode in (("lvl2", 0x01), ("lvl3", 0x02)):
+            with self.subTest(command=command):
+                runtime = AlienEvolutionPort()
+
+                self.assertTrue(runtime.apply_cheat_sequence(command))
+                runtime.step(_NEUTRAL_INPUT)
+                runtime.step(_frame_input_for_keys("s"))
+                gameplay_out = runtime.step(_NEUTRAL_INPUT)
+
+                self.assertEqual(runtime._fsm_state, FSM_STATE_GAMEPLAY_TICK_STAGE_1_FRAME)
+                self.assertEqual(int(gameplay_out.timing.delay_after_step_frames), 4)
+                self.assertEqual(runtime.var_active_map_mode & 0xFF, expected_mode)
+                self.assertEqual(runtime.var_runtime_objective_counter & 0xFF, 0x06)
+
+                runtime.advance_host_frame()
+                runtime.advance_host_frame()
+                runtime.advance_host_frame()
+                runtime.advance_host_frame()
+                next_out = runtime.step(_NEUTRAL_INPUT)
+
+                self.assertEqual(runtime._fsm_state, FSM_STATE_GAMEPLAY_TICK_STAGE_2_FRAME)
+                self.assertEqual(int(next_out.timing.delay_after_step_frames), 4)
+                self.assertEqual(runtime._fsm_transition_kind, "none")
 
     def test_unknown_cheat_is_ignored(self) -> None:
         runtime = AlienEvolutionPort()
