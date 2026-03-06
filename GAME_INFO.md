@@ -36,11 +36,6 @@ Port convenience hotkeys (optional, but useful for practice):
 - **F9** - quick load
 - **F10** - reset (back to title)
 
-Desktop-only practice cheats:
-
-- Type **`lvl1`**, **`lvl2`**, or **`lvl3`**, then stop typing for about **1 second** to jump to that level's normal pre-game splash.
-- Cheats are **disabled in the web version**.
-
 ---
 
 ## The HUD
@@ -210,7 +205,7 @@ Blast behavior (practical):
 ### T.N.T
 
 What it is:  
-A heavier contact explosive. Best thought of as your main answer to the **phase‑3 chaser** when you don’t have laser control yet.
+A heavier contact explosive. Best thought of as your main answer to the **phase‑3 adult** when you don’t have laser control yet.
 
 How to deploy:
 - Press **Space** while T.N.T is selected.
@@ -277,35 +272,128 @@ That tradeoff is one of the game’s main strategic levers.
 
 ## Enemy phases and behavior
 
-Each phase is a different threat model.
+The game does **not** use one generic “alien AI”. Internally there are four live enemy queues, and each queue has its own update rule.
 
-### Phase 0: static
+### Exact per-frame enemy update order
 
-- Does not move.
-- Blocks movement.
-- Evolves into phase 1 on an evolution pulse.
-- Is the “seed” that eventually turns into a reproducing phase‑3 alien if not eliminated.
+On each gameplay frame, enemy logic runs in this order:
 
-### Phase 1: roamer
+1. A global 3-step animation phase advances (`0 -> 1 -> 2 -> 0`).
+2. **Phase 1** movers update.
+3. **Phase 2** movers update.
+4. Any **already-active adult shot** advances.
+5. **Phase 3 / adult** movers update.
+6. **Phase 0** statics update (they do not move; they only toggle their display state).
 
-- Moves around corridors with a “keep going until blocked, then turn” feel.
-- Dies to mines easily.
+That order matters:
 
-### Phase 2: roamer (smarter)
+- Phase 1 and Phase 2 can die on mines before adults get their turn.
+- Adults can only arm a shot **after** their movement step, and only if no earlier adult shot is still active.
+- Phase 0 is truly static between evolution pulses.
 
-- Similar movement style, but with stronger trap awareness on later levels.
-- Still mine‑killable, but less predictable.
+### The four real runtime states
 
-### Phase 3: chaser (most dangerous)
+- **Phase 0 / queue 0** - static seed. No movement. The only per-frame change is a visual toggle (`0x19 <-> 0x1A`).
+- **Phase 1 / queue 1** - direction-preserving roamer.
+- **Phase 2 / queue 2** - the same base mover as phase 1, but with a different per-level “two tiles ahead” danger check.
+- **Phase 3 / queue 3** - adult mover. This is **not** true pathfinding to the player’s coordinates. It mostly keeps direction, and when it needs a new direction it tries to copy the player’s **last move direction**. On levels 2 and 3 it can also fire a straight-line shot.
 
-- Actively tries to close distance to you.
-- On levels 2 and 3 it gains a **line attack**:
-  - if it lines up with you (same row or column) *and* it’s facing toward you, it can fire a straight-line shot.
-  - It won’t fire if the tile directly in front of it is blocked.
+### Shared movement model for Phase 1 and Phase 2
 
-Phase 3 is also the reproduction phase: if you let them cycle, the population explodes.
+Each moving alien stores one of four direction bits:
 
----
+- `0x01` = step `-1` (one column left)
+- `0x02` = step `+1` (one column right)
+- `0x04` = step `+50` (one row down)
+- `0x08` = step `-50` (one row up)
+
+On its turn, a phase-1/phase-2 alien does this:
+
+1. If it is already in the death-animation state, it does not move. It advances through a short 3-step removal sequence and only then disappears and reduces the alien counter.
+2. If it is currently standing on an explosion marker (`0x38`), it is forced into that death/removal sequence immediately.
+3. It probes **two tiles ahead** in its current direction. If that exact tile matches the current level’s threshold code, the alien **does not move this frame** and instead picks a new direction.
+4. Otherwise it checks the tile **one tile ahead**:
+   - **Empty** -> move one tile and keep the same direction.
+   - **Mine (`0x25`)** -> move onto the mine, consume it, refund the mine to the player, and enter the death-animation sequence.
+   - **Any blocked low-code tile (`< 0x1D`) or an explosion marker (`0x38`)** -> do not move; pick a new direction instead.
+   - **Anything else** -> move into it.
+
+Two important consequences:
+
+- Teleport pads live in that blocked low-code range, so aliens do **not** use them.
+- Most weapon/effect tiles are *not* treated as hard obstacles by the mover itself; the consequence is handled by the effect system after or around the move.
+
+The “pick a new direction” part is **not true randomness**. It is a deterministic frame-based chooser tied to the frame counter. In practice it feels like a lightweight random turn rule, but if you reproduce the same situation on the same frame timing, you can get the same turn.
+
+### Adult / Phase 3 logic
+
+Adults use the same four direction states and the same one-tile move size, but their retargeting rule is different.
+
+On its turn, an adult does this:
+
+1. Death animation / explosion handling works the same way as for phases 1 and 2.
+2. It probes **two tiles ahead** in its current direction. If that tile matches the adult threshold code for the current level, the adult does **not** move; it switches to fallback-direction logic instead.
+3. If the next tile is blocked by a low-code obstacle (`< 0x1D`), by an explosion marker (`0x38`), or by an already-armed adult-shot marker (`0x39`), the adult again stays put and goes to fallback-direction logic.
+4. If the next tile is a **mine (`0x25`)**, the adult **does step onto it** and the mine is consumed/refunded, but the adult survives.
+5. Otherwise the adult moves one tile forward.
+
+The crucial correction to the old description is the fallback rule:
+
+- The adult does **not** calculate a route to the player’s current position.
+- When it needs a new direction, it first looks at the **player’s last move delta**.
+- If the copied lane passes the same immediate/two-tiles-ahead checks, the adult changes state to that direction and waits for its next turn.
+- If even that copied lane is rejected, it falls back to the same deterministic frame-based direction chooser used by the roamers.
+
+So the adult is best described as **“keep going until forced to retarget; then try to copy the player’s most recent heading”**, not as a true coordinate-seeking chaser. That is why on level 1 it often does **not** feel like it is directly homing in on you.
+
+### Adult ranged attack (levels 2 and 3 only)
+
+The ranged attack is enabled by a level patch; it is completely disabled on level 1.
+
+After an adult successfully moves, it tries to arm a shot only if **all** of these are true:
+
+- level 2 or 3 is active,
+- no earlier adult shot is still active,
+- player and adult are on the same row **or** the same column,
+- the adult is already facing **toward** the player,
+- the adjacent tile in the firing direction is empty.
+
+If all checks pass, the game writes a shot marker into that adjacent tile and stores a direction seed for the adult-shot executor.
+
+Practical meaning:
+
+- the shot is a straight row/column attack,
+- it is only armed **after** the adult has moved,
+- it does **not** require a full clear lane at fire time - only the very first tile has to be empty,
+- on later frames the shot is advanced by the same straight-line propagation core used by the player’s laser,
+- walls/objects farther down the lane stop it during propagation.
+
+### Level-by-level AI patches
+
+**Level 1**
+
+- Phase 1: no two-tiles-ahead threshold patch.
+- Phase 2: no two-tiles-ahead threshold patch.
+- Adult: no two-tiles-ahead threshold patch.
+- Adult shot: disabled.
+- Result: the adult only retargets when its current lane is rejected, and that retarget is based on your **last heading**, not your exact coordinates.
+
+**Level 2**
+
+- Phase 1: same as level 1.
+- Phase 2: if a **mine is exactly two tiles ahead**, it turns away instead of walking straight into that line.
+- Adult: if a **wall is exactly two tiles ahead**, it retargets instead of continuing straight.
+- Adult shot: enabled.
+
+**Level 3**
+
+- Phase 1: now also gains the **wall two-tiles-ahead** turn-away rule.
+- Phase 2: keeps the **mine two-tiles-ahead** rule from level 2.
+- Adult: keeps the level-2 wall lookahead and the ranged shot.
+
+### Death/removal timing
+
+When a moving alien dies (for example by stepping on a mine), removal is not instant. The queue state goes through a short 3-step animation sequence first, and the alien counter drops only when the final cleanup happens. So in tight corridors a just-killed alien can briefly remain in the lane before the population counter catches up.
 
 ## The letter bonus (extra lives) - how it really works
 
@@ -375,16 +463,18 @@ Teleport pads are deterministic and one-way. The skill isn’t “react and hope
 - knowing what safe space exists *around the destination pad*,
 - and using the cycle to reposition without giving phase‑3 a clean line.
 
-### Chaser line-of-sight denial (levels 2–3)
-Phase‑3 can fire only when:
-- you share a row/column, and
-- it is facing toward you, and
-- the tile directly in front of it is empty.
+### Adult shot denial (levels 2–3)
+An adult can fire only when:
+- you share a row/column,
+- it is already facing toward you,
+- the tile directly in front of it is empty,
+- and no earlier adult shot is still active.
 
 You can deny shots by:
 - staying off the same row/column,
-- forcing it to approach from behind walls/blocks,
-- or deliberately “cluttering” the tile in front of it (careful: this can also limit your own tools).
+- forcing its facing away from you (important: adults retarget from your **last move direction**, not from your exact position),
+- forcing it to approach behind walls/blocks,
+- or deliberately “cluttering” the tile directly in front of it (careful: this can also limit your own tools).
 
 ### Letter discipline
 Because each marker pickup is consumed, your letter play becomes a timing game:
@@ -426,7 +516,7 @@ Key facts:
   - Phase 0 (static): (r05, c04)
   - Phase 1 (roamer): (r25, c02)
   - Phase 2 (roamer): (r27, c47)
-  - Phase 3 (chaser): (r40, c25)
+  - Phase 3 (adult): (r40, c25)
 - Pushable blocks: 22
 - Teleport pads: 4 (see table below)
 
@@ -440,8 +530,10 @@ Teleport cycle:
 | T3 | (r44, c04) | → T4 | (r44, c44) |
 | T4 | (r44, c44) | → T1 | (r07, c25) |
 
-Level 1 enemy note:
-- Phase‑3 chasers do **not** use the ranged line attack here.
+Level 1 enemy notes:
+- No enemy class has its level-specific two-tiles-ahead threshold patch here.
+- Phase‑3 adults do **not** use the ranged shot here.
+- When a phase‑3 adult has to retarget, it copies your **last move direction**; it does not pathfind to your current coordinates.
 
 ### Level 2
 
@@ -456,7 +548,7 @@ Key facts:
   - Phase 0 (static): (r36, c24)
   - Phase 1 (roamer): (r03, c44)
   - Phase 2 (roamer): (r02, c14)
-  - Phase 3 (chaser): (r46, c42)
+  - Phase 3 (adult): (r46, c42)
 - Pushable blocks: 28
 - Teleport pads: 4 (see table below)
 
@@ -471,8 +563,9 @@ Teleport cycle:
 | T4 | (r37, c10) | → T1 | (r13, c04) |
 
 Level 2 enemy notes (difficulty bump):
-- Phase‑3 chasers gain the **ranged line attack**.
-- Phase‑2 roamers gain a simple “lookahead”: if a mine is two tiles ahead in their current direction, they are more likely to turn away.
+- Phase‑2 movers turn away if a **mine is exactly two tiles ahead** in their current direction.
+- Phase‑3 adults turn away if a **wall is exactly two tiles ahead** in their current direction.
+- Phase‑3 adults can arm the ranged shot if you are aligned and they are already facing you.
 
 ### Level 3
 
@@ -487,7 +580,7 @@ Key facts:
   - Phase 0 (static): (r19, c31)
   - Phase 1 (roamer): (r23, c04)
   - Phase 2 (roamer): (r32, c23)
-  - Phase 3 (chaser): (r25, c45)
+  - Phase 3 (adult): (r25, c45)
 - Pushable blocks: 28
 - Teleport pads: 4 (see table below)
 
@@ -502,8 +595,9 @@ Teleport cycle:
 | T4 | (r44, c44) | → T1 | (r04, c04) |
 
 Level 3 enemy notes:
-- Phase‑3 line attack remains enabled.
-- Phase‑1 roamers also gain extra wall lookahead (they adjust direction sooner around corridors).
+- Phase‑1 movers also gain the **wall two-tiles-ahead** turn-away rule.
+- Phase‑2 keeps the level-2 **mine two-tiles-ahead** rule.
+- Phase‑3 adults keep the level-2 wall lookahead and the ranged shot.
 - Overall navigation pressure is higher because of the layout and block placement.
 
 ---
@@ -520,7 +614,7 @@ Legend:
 - `s` static alien start (phase 0)
 - `e` roamer start (phase 1)
 - `m` roamer start (phase 2)
-- `A` chaser start (phase 3)
+- `A` adult start (phase 3)
 - `.` empty
 
 ### Level 1 schematic
