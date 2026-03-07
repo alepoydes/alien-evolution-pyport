@@ -167,13 +167,13 @@ class MarkerCounters:
 _DEFAULT_DEFINE_KEYS_SLOTS: Final[tuple[tuple[int, int], ...]] = (
     # Default modern keyboard profile:
     # slot1=Up(W), slot2=Down(S), slot3=Left(A), slot4=Right(D),
-    # slot5=Action(Space), slot6=Secondary/overlay(Enter).
+    # slot5=Action(Space), slot6=Secondary/overlay(E).
     (0xFBFE, 0x4F),  # W
     (0xFDFE, 0x4F),  # S
     (0xFDFE, 0x47),  # A
     (0xFDFE, 0x57),  # D
     (0x7FFE, 0x47),  # Space
-    (0xBFFE, 0x47),  # Enter
+    (0xFBFE, 0x57),  # E
 )
 _DEFAULT_HIGHSCORE_EDIT_ROW_INDEX: Final[int] = 0x00
 _DEFAULT_HIGHSCORE_NAME_EDIT_STATE: Final[int] = 0x00

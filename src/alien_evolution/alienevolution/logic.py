@@ -438,7 +438,7 @@ class AlienEvolutionPort(StatefulManifestRuntime, AlienEvolutionData, ZXSpectrum
             self.const_scenario_preset_c_stream_1,
             0x0004,
         )
-        # Default modern keyboard profile: W/A/S/D + Space + Enter.
+        # Default modern keyboard profile: W/A/S/D + Space + E.
         self.patch_control_scan_slot_1_port_word = 0xFBFE
         self.patch_control_scan_slot_1_bit_opcode = 0x4F
         self.patch_control_scan_slot_1_branch_opcode = 0xCA
@@ -454,9 +454,9 @@ class AlienEvolutionPort(StatefulManifestRuntime, AlienEvolutionData, ZXSpectrum
         self.patch_control_scan_slot_5_port_word = 0x7FFE
         self.patch_control_scan_slot_5_bit_opcode = 0x47
         self.patch_control_scan_slot_5_action_opcode = 0xCC
-        self.patch_control_scan_slot_6_port_word = 0xBFFE
+        self.patch_control_scan_slot_6_port_word = 0xFBFE
         self.patch_control_scan_slot_6_prefix_opcode = 0xCB
-        self.patch_control_scan_slot_6_bit_opcode = 0x47
+        self.patch_control_scan_slot_6_bit_opcode = 0x57
         self.patch_control_scan_slot_6_branch_opcode = 0xCA
         self._glyph_bias_ptr = BlockPtr(self.const_text_glyph_source_head, -0x0002)
         self._stream_ptr_a = BlockPtr(self.const_scenario_preset_b_stream_1, 0x0000)

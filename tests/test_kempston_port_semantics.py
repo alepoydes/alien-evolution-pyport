@@ -6,6 +6,16 @@ from alien_evolution.alienevolution.logic import AlienEvolutionPort
 
 
 class KempstonPortSemanticsTests(unittest.TestCase):
+    def test_default_keyboard_profile_slot6_uses_e_key(self) -> None:
+        runtime = AlienEvolutionPort()
+
+        self.assertEqual(runtime.patch_control_scan_slot_6_port_word, 0xFBFE)
+        self.assertEqual(runtime.patch_control_scan_slot_6_prefix_opcode, 0xCB)
+        self.assertEqual(runtime.patch_control_scan_slot_6_bit_opcode, 0x57)
+        self.assertEqual(runtime.patch_control_scan_slot_6_branch_opcode, 0xCA)
+        self.assertEqual(runtime.const_define_keys_descriptor_table[5].port_word, 0xFBFE)
+        self.assertEqual(runtime.const_define_keys_descriptor_table[5].mask_byte, 0x57)
+
     def test_port_df_exposes_kempston_active_high_bits(self) -> None:
         runtime = AlienEvolutionPort()
 

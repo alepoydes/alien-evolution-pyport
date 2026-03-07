@@ -28,7 +28,7 @@ Default “modern” bindings are:
 
 - **W / A / S / D** - move (up / left / down / right)
 - **Space** - use the currently selected weapon/tool
-- **Enter** - cycle the selected weapon/tool (MINES → BOMBS → T.N.T → LASER)
+- **E** - cycle the selected weapon/tool (MINES → BOMBS → T.N.T → LASER)
 
 Port convenience hotkeys (optional, but useful for practice):
 
@@ -153,7 +153,7 @@ If you want to play the level like a chessboard (and for high scores, you kind o
 
 ## Weapons and tools
 
-You have 4 tools, selected by cycling with **Enter**. Use the current one with **Space**.
+You have 4 tools, selected by cycling with **E**. Use the current one with **Space**.
 
 A key positioning detail:
 
