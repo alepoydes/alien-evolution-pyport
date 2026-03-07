@@ -460,7 +460,7 @@ def run_pyxel_game(
         last_output = runtime.step(frame_input)
         redraw_required = True
         pending_delay_frames = max(0, int(last_output.timing.delay_after_step_frames))
-        audio_player.submit(last_output.audio_events)
+        audio_player.submit(last_output.audio_events, now_s=now_s)
         remaining_host_frames -= 1
 
         if remaining_host_frames > 0 and pending_delay_frames > 0:

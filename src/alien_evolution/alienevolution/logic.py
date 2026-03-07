@@ -366,7 +366,7 @@ class AlienEvolutionPort(StatefulManifestRuntime, AlienEvolutionData, ZXSpectrum
         "_audio_clock",
         "_audio_emit_epoch_id",
         "_audio_events",
-        "_audio_lane_tails",
+        "_audio_epoch_tails",
         "_fsm_step_active",
         "_frame_input",
         "_pending_delay_after_step_frames",
@@ -708,22 +708,42 @@ class AlienEvolutionPort(StatefulManifestRuntime, AlienEvolutionData, ZXSpectrum
         self.var_runtime_progress_byte_1 = 0x00
         self.var_runtime_progress_byte_2 = 0x00
 
-    def _rom_beeper(self, de_ticks: int, hl_period: int) -> int:
+    def _rom_beeper(self, de_ticks: int, hl_period: int, *, start_tick: int | None = None) -> int:
         # Game-level approximation of ROM 0x03B5 call used by this code path.
         period = hl_period & 0xFFFF
         ticks = de_ticks & 0xFFFF
         self.emit_rom_beeper(
             period=period,
             ticks=ticks,
-            tone="S",
-            lane=2,
+            waveform="S",
             source="rom_beeper",
+            start_tick=start_tick,
         )
         per_wave_clock_units = 8.0 * (float(period if period > 0 else 1) + 30.125)
         timing_cost = int(round(float(ticks if ticks > 0 else 1) * per_wave_clock_units))
         # Timing is consumed by outer control loops (gameplay/menu/intermission),
         # not by beeper itself.
         return timing_cost
+
+    def _rom_beeper_duration_ticks(self, de_ticks: int, hl_period: int) -> int:
+        return self.rom_beeper_duration_ticks(period=(hl_period & 0xFFFF), ticks=(de_ticks & 0xFFFF))
+
+    def _rom_beeper_sequence(
+        self,
+        packets: Sequence[tuple[int, int]],
+        *,
+        start_tick: int | None = None,
+    ) -> int:
+        cursor_tick = self.current_audio_tick() if start_tick is None else max(0, int(start_tick))
+        total_timing_cost = 0
+        for de_ticks, hl_period in packets:
+            total_timing_cost += self._rom_beeper(
+                de_ticks=de_ticks,
+                hl_period=hl_period,
+                start_tick=cursor_tick,
+            )
+            cursor_tick += self._rom_beeper_duration_ticks(de_ticks=de_ticks, hl_period=hl_period)
+        return total_timing_cost
 
     @staticmethod
     def _rla(a: int, carry_in: int) -> tuple[int, int]:
@@ -2423,8 +2443,12 @@ class AlienEvolutionPort(StatefulManifestRuntime, AlienEvolutionData, ZXSpectrum
 
     # ZX 0x6F2F..0x6F45
     def fn_blink_delay_two_phase_wait(self):
-        self._rom_beeper(de_ticks=0x0050, hl_period=0x01F4)
-        self._rom_beeper(de_ticks=0x005A, hl_period=0x02BB)
+        self._rom_beeper_sequence(
+            (
+                (0x0050, 0x01F4),
+                (0x005A, 0x02BB),
+            )
+        )
 
     # ZX 0x6F46..0x6FAC
     def fn_high_score_table_draw_routine(self):
@@ -2588,8 +2612,12 @@ class AlienEvolutionPort(StatefulManifestRuntime, AlienEvolutionData, ZXSpectrum
 
     # ZX 0x7123..0x7134
     def fn_front_end_two_step_beeper_cadence(self):
-        self._rom_beeper(de_ticks=0x0032, hl_period=0x0032)
-        self._rom_beeper(de_ticks=0x0064, hl_period=0x0064)
+        self._rom_beeper_sequence(
+            (
+                (0x0032, 0x0032),
+                (0x0064, 0x0064),
+            )
+        )
 
     # ZX 0x7135..0x713E
     def fn_input_patch_preset(self):
@@ -4749,8 +4777,14 @@ class AlienEvolutionPort(StatefulManifestRuntime, AlienEvolutionData, ZXSpectrum
                 self._set_patch_callback_hook_opcode(0xC9)
             else:
                 self.var_marker_counters.set(marker_slot, 0x01)
-                _consume_timing(self._rom_beeper(de_ticks=0x0032, hl_period=0x0032))
-                _consume_timing(self._rom_beeper(de_ticks=0x0064, hl_period=0x0064))
+                _consume_timing(
+                    self._rom_beeper_sequence(
+                        (
+                            (0x0032, 0x0032),
+                            (0x0064, 0x0064),
+                        )
+                    )
+                )
                 self.fn_hud_decimal_counter_animator_core()
 
         self.visible_cell_staging_preset_builder()
@@ -5466,10 +5500,12 @@ class AlienEvolutionPort(StatefulManifestRuntime, AlienEvolutionData, ZXSpectrum
             # backend quantization stretching transition audio beyond visuals.
             self._rom_beeper(de_ticks=0x0005, hl_period=0x0198)
             return
-        HL_period = 0x0190
+        packets: list[tuple[int, int]] = []
+        hl_period = 0x0190
         for _ in range(0x05):
-            self._rom_beeper(de_ticks=0x0001, hl_period=HL_period)
-            HL_period = (HL_period + 0x0004) & 0xFFFF
+            packets.append((0x0001, hl_period))
+            hl_period = (hl_period + 0x0004) & 0xFFFF
+        self._rom_beeper_sequence(tuple(packets))
 
     # ZX 0xF4D0..0xF505
     def fn_draw_mission_status_panel_bitmap_chunk(self) -> None:
@@ -5488,8 +5524,12 @@ class AlienEvolutionPort(StatefulManifestRuntime, AlienEvolutionData, ZXSpectrum
 
     # ZX 0xF506..0xF50E
     def fn_transition_beeper_helper(self):
-        self._rom_beeper(de_ticks=0x0064, hl_period=0x012C)
-        return self.fn_transition_beeper_entry_a()
+        self._rom_beeper_sequence(
+            (
+                (0x0064, 0x012C),
+                (0x00C8, 0x00C8),
+            )
+        )
 
     # ZX 0xF50F..0xF518
     def fn_transition_beeper_entry_a(self):
@@ -6072,14 +6112,13 @@ class AlienEvolutionPort(StatefulManifestRuntime, AlienEvolutionData, ZXSpectrum
 
         if fast_present:
             if fast_is_carrier:
-                tone = "T"
+                waveform = "T"
                 volume = 0
             else:
-                tone = "S"
+                waveform = "S"
                 volume = 4 if slow_present and not slow_is_carrier else 5
             self.emit_note_event(
-                lane=0,
-                tone=tone,
+                waveform=waveform,
                 freq_hz=freq_fast,
                 start_tick=self._stream_lane_ticks[0],
                 duration_ticks=slot_ticks,
@@ -6089,14 +6128,13 @@ class AlienEvolutionPort(StatefulManifestRuntime, AlienEvolutionData, ZXSpectrum
         self._stream_lane_ticks[0] += slot_ticks
         if slow_present:
             if slow_is_carrier:
-                tone = "T"
+                waveform = "T"
                 volume = 0
             else:
-                tone = "S"
+                waveform = "S"
                 volume = 4 if fast_present and not fast_is_carrier else 5
             self.emit_note_event(
-                lane=1,
-                tone=tone,
+                waveform=waveform,
                 freq_hz=freq_slow,
                 start_tick=self._stream_lane_ticks[1],
                 duration_ticks=slot_ticks,
@@ -6215,8 +6253,7 @@ class AlienEvolutionPort(StatefulManifestRuntime, AlienEvolutionData, ZXSpectrum
             volume = 3
 
         self.emit_note_event(
-            lane=0,
-            tone="N",
+            waveform="N",
             freq_hz=freq_hz,
             start_tick=self._stream_lane_ticks[0],
             duration_ticks=slot_ticks,
@@ -6263,8 +6300,7 @@ class AlienEvolutionPort(StatefulManifestRuntime, AlienEvolutionData, ZXSpectrum
         duration_s = float(waves) / freq
         duration_ticks = self._duration_ticks_from_seconds(duration_s)
         self.emit_note_event(
-            lane=0,
-            tone="S",
+            waveform="S",
             freq_hz=freq,
             start_tick=self._stream_lane_ticks[0],
             duration_ticks=duration_ticks,
