@@ -21,6 +21,18 @@ def _queue_ticks(player: PyxelAudioPlayer, channel: int) -> list[int]:
     return [queued.ticks for queued in player._queues[channel]]
 
 
+def _stream_command_timings(commands: tuple[AudioCommand, ...] | list[AudioCommand]) -> list[tuple[int, int, int]]:
+    channel_time = [0, 0, 0, 0]
+    timings: list[tuple[int, int, int]] = []
+    for cmd in commands:
+        start = channel_time[cmd.channel] + cmd.start_delay_ticks
+        duration_ticks = int(round(cmd.duration_s * 120.0))
+        end = start + duration_ticks
+        timings.append((cmd.channel, start, end))
+        channel_time[cmd.channel] = end
+    return timings
+
+
 class PyxelSoundPlayerTests(unittest.TestCase):
     def test_note_from_hz_uses_pyxel_octave_base(self) -> None:
         self.assertEqual(_note_from_hz(429.89), "A2")
@@ -459,6 +471,25 @@ class PyxelSoundPlayerTests(unittest.TestCase):
         self.assertGreaterEqual(len(runtime._audio_commands), 1)
         self.assertTrue(all(cmd.source == "stream_music" for cmd in runtime._audio_commands))
 
+    def test_stream_semantic_mix_keeps_carrier_channel_timing_present(self) -> None:
+        runtime = AlienEvolutionPort()
+        runtime._audio_commands.clear()
+        runtime._stream_pending_delay_ticks = [0, 0, 0]
+
+        runtime._emit_stream_semantic_mix(
+            iterations=4608,
+            fast_wraps=86,
+            slow_wraps=4608,
+        )
+
+        self.assertEqual(len(runtime._audio_commands), 2)
+        channel_cmds = {cmd.channel: cmd for cmd in runtime._audio_commands}
+        self.assertEqual(channel_cmds[0].tone, "S")
+        self.assertEqual(channel_cmds[1].tone, "T")
+        self.assertEqual(channel_cmds[0].start_delay_ticks, 0)
+        self.assertEqual(channel_cmds[1].start_delay_ticks, 0)
+        self.assertEqual(channel_cmds[1].volume, 0)
+
     def test_bitstream_noise_frequency_tracks_pattern_density(self) -> None:
         runtime = AlienEvolutionPort()
         captured: list[float] = []
@@ -548,7 +579,31 @@ class PyxelSoundPlayerTests(unittest.TestCase):
 
         self.assertTrue(found_delayed)
 
-    def test_stream_presets_b_and_c_have_delayed_stream_music_commands(self) -> None:
+    def test_stream_preset_b_retains_delayed_stream_music_commands(self) -> None:
+        runtime = AlienEvolutionPort()
+        runtime._audio_commands.clear()
+        runtime._stream_ptr_a = BlockPtr(runtime.const_scenario_preset_b_stream_1, 0x0000)
+        runtime._stream_ptr_c = BlockPtr(runtime.const_scenario_preset_b_stream_2, 0x0000)
+        runtime._stream_ptr_b = runtime._stream_ptr_a.add(0x0001)
+        runtime._stream_ptr_d = runtime._stream_ptr_c.add(0x0001)
+        delayed_count = 0
+        total_stream_commands = 0
+
+        for _ in range(2048):
+            before = len(runtime._audio_commands)
+            try:
+                runtime.core_command_interpreter_scenario_stream_engine()
+            except ForcedInterpreterAbort:
+                break
+            emitted = runtime._audio_commands[before:]
+            stream_emitted = [cmd for cmd in emitted if cmd.source == "stream_music"]
+            total_stream_commands += len(stream_emitted)
+            delayed_count += sum(1 for cmd in stream_emitted if cmd.start_delay_ticks > 0)
+
+        self.assertGreater(total_stream_commands, 0)
+        self.assertGreater(delayed_count, 0)
+
+    def test_stream_presets_b_and_c_start_both_channels_together(self) -> None:
         runtime = AlienEvolutionPort()
         presets = (
             (runtime.const_scenario_preset_b_stream_1, runtime.const_scenario_preset_b_stream_2),
@@ -557,26 +612,33 @@ class PyxelSoundPlayerTests(unittest.TestCase):
 
         for stream_a, stream_b in presets:
             runtime._audio_commands.clear()
+            runtime._reset_stream_audio_timing_state()
             runtime._stream_ptr_a = BlockPtr(stream_a, 0x0000)
             runtime._stream_ptr_c = BlockPtr(stream_b, 0x0000)
             runtime._stream_ptr_b = runtime._stream_ptr_a.add(0x0001)
             runtime._stream_ptr_d = runtime._stream_ptr_c.add(0x0001)
-            delayed_count = 0
-            total_stream_commands = 0
 
-            for _ in range(2048):
-                before = len(runtime._audio_commands)
+            for _ in range(8):
                 try:
                     runtime.core_command_interpreter_scenario_stream_engine()
                 except ForcedInterpreterAbort:
                     break
-                emitted = runtime._audio_commands[before:]
-                stream_emitted = [cmd for cmd in emitted if cmd.source == "stream_music"]
-                total_stream_commands += len(stream_emitted)
-                delayed_count += sum(1 for cmd in stream_emitted if cmd.start_delay_ticks > 0)
 
-            self.assertGreater(total_stream_commands, 0)
-            self.assertGreater(delayed_count, 0)
+            stream_cmds = [cmd for cmd in runtime._audio_commands if cmd.source == "stream_music"]
+            timings = _stream_command_timings(stream_cmds)
+            first_start_by_channel: dict[int, int] = {}
+            for channel, start, _ in timings:
+                if channel not in first_start_by_channel:
+                    first_start_by_channel[channel] = start
+                if len(first_start_by_channel) == 2:
+                    break
+
+            self.assertEqual(first_start_by_channel[0], 0)
+            self.assertEqual(first_start_by_channel[1], 0)
+
+            paired_starts = {(channel, start) for channel, start, _ in timings[:6]}
+            shared_starts = {start for start in {s for _, s, _ in timings[:6]} if (0, start) in paired_starts and (1, start) in paired_starts}
+            self.assertTrue(shared_starts)
 
 
 if __name__ == "__main__":

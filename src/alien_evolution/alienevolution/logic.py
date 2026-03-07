@@ -6038,36 +6038,37 @@ class AlienEvolutionPort(StatefulManifestRuntime, AlienEvolutionData, ZXSpectrum
         # 1-bit latch (port 0xFE bit 4). When one divider is configured with an extremely
         # small reload value (the common "1" case), it becomes an ultrasonic carrier.
         # On real hardware that carrier is heavily attenuated by the speaker and ends up
-        # acting as a modulation source for the other divider, not as a separately heard
-        # pitched voice.
+        # acting as a modulation source for the other divider rather than as a dominant
+        # bright lead.
         #
-        # If we naively map that carrier to Pyxel notes (which have a much lower practical
-        # ceiling), we get the failure mode reported during porting: low-register phrases
-        # are masked by a sharp high tone.
+        # We still need to keep that carrier in the semantic timeline: dropping it
+        # entirely makes the affected voice "enter late" in the Pyxel reconstruction,
+        # which shifts note onsets between channels relative to the original.
         freq_fast = float(fast_wraps) / (2.0 * total_duration_s) if fast_wraps > 0 else 0.0
         freq_slow = float(slow_wraps) / (2.0 * total_duration_s) if slow_wraps > 0 else 0.0
 
-        # Treat very high divider rates as a carrier/hiss component and avoid emitting them
-        # as pitched voices.
+        # Treat very high divider rates as a carrier/hiss component. Keep them present as
+        # timed zero-volume placeholders so they preserve segment boundaries without being
+        # audible at all.
         carrier_cutoff_hz = 3800.0
         fast_is_carrier = fast_wraps > 0 and freq_fast > carrier_cutoff_hz
         slow_is_carrier = slow_wraps > 0 and freq_slow > carrier_cutoff_hz
-        fast_audible = fast_wraps > 0 and not fast_is_carrier
-        slow_audible = slow_wraps > 0 and not slow_is_carrier
-        audible_by_channel = (fast_audible, slow_audible)
+        fast_present = fast_wraps > 0
+        slow_present = slow_wraps > 0
 
-        both_voices = fast_audible and slow_audible
-
-        for channel, is_audible in enumerate(audible_by_channel):
-            if not is_audible:
+        for channel, has_signal in enumerate((fast_present, slow_present)):
+            if not has_signal:
                 self._stream_pending_delay_ticks[channel] += slot_ticks
 
-        if fast_audible:
-            # When the other divider is a carrier, the XOR-mixed beeper output feels closer
-            # to a single full-amplitude voice than to "half of a duet".
-            volume = 4 if both_voices else (6 if slow_is_carrier else 5)
+        if fast_present:
+            if fast_is_carrier:
+                tone = "T"
+                volume = 0
+            else:
+                tone = "S"
+                volume = 4 if slow_present and not slow_is_carrier else 5
             self.emit_audio(
-                tone="S",
+                tone=tone,
                 freq_hz=freq_fast,
                 duration_s=slot_duration_s,
                 volume=volume,
@@ -6076,10 +6077,15 @@ class AlienEvolutionPort(StatefulManifestRuntime, AlienEvolutionData, ZXSpectrum
                 start_delay_ticks=self._stream_pending_delay_ticks[0],
             )
             self._stream_pending_delay_ticks[0] = 0
-        if slow_audible:
-            volume = 4 if both_voices else (6 if fast_is_carrier else 5)
+        if slow_present:
+            if slow_is_carrier:
+                tone = "T"
+                volume = 0
+            else:
+                tone = "S"
+                volume = 4 if fast_present and not fast_is_carrier else 5
             self.emit_audio(
-                tone="S",
+                tone=tone,
                 freq_hz=freq_slow,
                 duration_s=slot_duration_s,
                 volume=volume,
