@@ -4,7 +4,7 @@ from typing import Any
 
 from .input import joy_kempston, keyboard_rows, read_frame_input
 from .screen import apply_zx_palette, blit_zx_screen_to_pyxel
-from .sound import PyxelAudioPlayer, beep, play_audio_commands
+from .sound import PyxelAudioPlayer, beep, play_audio_events
 from .runner import run_pyxel_game
 
 
@@ -23,6 +23,6 @@ __all__ = [
     "blit_zx_screen_to_pyxel",
     "PyxelAudioPlayer",
     "beep",
-    "play_audio_commands",
+    "play_audio_events",
     "run_pyxel_game",
 ]

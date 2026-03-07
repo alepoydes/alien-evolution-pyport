@@ -17,7 +17,16 @@ from .zx.screen import (
     ZX_PALETTE_16,
     new_zx_screen_buffers,
 )
-from .zx.runtime import FrameInput, AudioCommand, StepOutput, FrameStepRuntime, StatefulRuntime
+from .zx.runtime import (
+    FrameInput,
+    AudioClockSnapshot,
+    AudioEvent,
+    AudioNoteEvent,
+    AudioResetEvent,
+    StepOutput,
+    FrameStepRuntime,
+    StatefulRuntime,
+)
 from .zx.state import StatefulManifestRuntime
 
 __all__ = [
@@ -28,7 +37,10 @@ __all__ = [
     "ZX_PALETTE_16",
     "new_zx_screen_buffers",
     "FrameInput",
-    "AudioCommand",
+    "AudioClockSnapshot",
+    "AudioEvent",
+    "AudioNoteEvent",
+    "AudioResetEvent",
     "StepOutput",
     "FrameStepRuntime",
     "StatefulRuntime",

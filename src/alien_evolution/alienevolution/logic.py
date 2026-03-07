@@ -180,7 +180,7 @@ class AlienEvolutionPort(StatefulManifestRuntime, AlienEvolutionData, ZXSpectrum
         "_interrupts_enabled",
         "_level_complete_roll_audio_frame_sync",
         "_rom_last_key_scan",
-        "_stream_pending_delay_ticks",
+        "_stream_lane_ticks",
         "_stream_slot_tick_remainder",
         "_z80_r_register",
         "border_color",
@@ -363,7 +363,10 @@ class AlienEvolutionPort(StatefulManifestRuntime, AlienEvolutionData, ZXSpectrum
         "const_define_key_slot_6_port_word",
     )
     _STATE_TRANSIENT_FIELDS: tuple[str, ...] = (
-        "_audio_commands",
+        "_audio_clock",
+        "_audio_emit_epoch_id",
+        "_audio_events",
+        "_audio_lane_tails",
         "_fsm_step_active",
         "_frame_input",
         "_pending_delay_after_step_frames",
@@ -486,7 +489,7 @@ class AlienEvolutionPort(StatefulManifestRuntime, AlienEvolutionData, ZXSpectrum
         self._fsm_step_active = False
         self._rom_last_key_scan: tuple[int, int] | None = None
         self._level_complete_roll_audio_frame_sync = False
-        self._stream_pending_delay_ticks = [0, 0, 0]
+        self._stream_lane_ticks = [0, 0, 0]
         self._stream_slot_tick_remainder = 0.0
 
     def reset(self) -> None:
@@ -529,7 +532,7 @@ class AlienEvolutionPort(StatefulManifestRuntime, AlienEvolutionData, ZXSpectrum
         self._fsm_state = FSM_STATE_STREAM_INTERMISSION_FRAME
 
     def _state_reset_transient_runtime_state(self) -> None:
-        self._audio_commands.clear()
+        self._audio_events.clear()
         self._pending_delay_after_step_frames = 0
         self._fsm_step_active = False
         self.sample_inputs(joy_kempston=0, keyboard_rows=(0xFF,) * 8)
@@ -713,6 +716,8 @@ class AlienEvolutionPort(StatefulManifestRuntime, AlienEvolutionData, ZXSpectrum
             period=period,
             ticks=ticks,
             tone="S",
+            lane=2,
+            source="rom_beeper",
         )
         per_wave_clock_units = 8.0 * (float(period if period > 0 else 1) + 30.125)
         timing_cost = int(round(float(ticks if ticks > 0 else 1) * per_wave_clock_units))
@@ -827,16 +832,16 @@ class AlienEvolutionPort(StatefulManifestRuntime, AlienEvolutionData, ZXSpectrum
         return FSM_STATE_MENU_INIT, None
 
     def _reset_stream_audio_timing_state(self) -> None:
-        self._ensure_stream_pending_delay_slots()
-        self._stream_pending_delay_ticks[0] = 0
-        self._stream_pending_delay_ticks[1] = 0
-        self._stream_pending_delay_ticks[2] = 0
+        self._ensure_stream_lane_slots()
+        self._stream_lane_ticks[0] = 0
+        self._stream_lane_ticks[1] = 0
+        self._stream_lane_ticks[2] = 0
         self._stream_slot_tick_remainder = 0.0
 
-    def _ensure_stream_pending_delay_slots(self) -> None:
-        value = self._stream_pending_delay_ticks
+    def _ensure_stream_lane_slots(self) -> None:
+        value = self._stream_lane_ticks
         if not isinstance(value, list):
-            self._stream_pending_delay_ticks = [0, 0, 0]
+            self._stream_lane_ticks = [0, 0, 0]
             return
         while len(value) < 3:
             value.append(0)
@@ -851,6 +856,12 @@ class AlienEvolutionPort(StatefulManifestRuntime, AlienEvolutionData, ZXSpectrum
         self._stream_slot_tick_remainder = raw_ticks - float(rounded)
         return rounded
 
+    def _queue_mode_audio_reset(self) -> int:
+        cut_tick = self.audio_epoch_tail()
+        if cut_tick <= 0:
+            cut_tick = self.current_audio_tick()
+        return self.schedule_reset(cut_tick)
+
     def _fsm_start_stream(
         self,
         *,
@@ -859,6 +870,7 @@ class AlienEvolutionPort(StatefulManifestRuntime, AlienEvolutionData, ZXSpectrum
         abort_on_keypress: bool,
         return_state: str,
     ) -> None:
+        self._queue_mode_audio_reset()
         self.patch_stream_player_default_stream_a_ptr = stream_a
         self.patch_stream_player_default_stream_b_ptr = stream_b
         self._stream_ptr_a = stream_a
@@ -1449,6 +1461,7 @@ class AlienEvolutionPort(StatefulManifestRuntime, AlienEvolutionData, ZXSpectrum
             self._fsm_transition_kind = "ending_post_highscore"
             return FSM_STATE_TRANSITION_DISPATCH, None
         if kind == "ending_post_highscore":
+            self._queue_mode_audio_reset()
             self.fn_high_score_table_draw_routine()
             self._fsm_transition_kind = "ending_wait_release"
             self._fsm_menu_ctx["wait_release_return_state"] = FSM_STATE_TRANSITION_DISPATCH
@@ -1487,6 +1500,7 @@ class AlienEvolutionPort(StatefulManifestRuntime, AlienEvolutionData, ZXSpectrum
             self._fsm_transition_kind = "failure_post_highscore"
             return FSM_STATE_TRANSITION_DISPATCH, None
         if kind == "failure_post_highscore":
+            self._queue_mode_audio_reset()
             self.fn_high_score_table_draw_routine()
             self._fsm_transition_kind = "failure_wait_release"
             self._fsm_menu_ctx["wait_release_return_state"] = FSM_STATE_TRANSITION_DISPATCH
@@ -6056,10 +6070,6 @@ class AlienEvolutionPort(StatefulManifestRuntime, AlienEvolutionData, ZXSpectrum
         fast_present = fast_wraps > 0
         slow_present = slow_wraps > 0
 
-        for channel, has_signal in enumerate((fast_present, slow_present)):
-            if not has_signal:
-                self._stream_pending_delay_ticks[channel] += slot_ticks
-
         if fast_present:
             if fast_is_carrier:
                 tone = "T"
@@ -6067,16 +6077,16 @@ class AlienEvolutionPort(StatefulManifestRuntime, AlienEvolutionData, ZXSpectrum
             else:
                 tone = "S"
                 volume = 4 if slow_present and not slow_is_carrier else 5
-            self.emit_audio(
+            self.emit_note_event(
+                lane=0,
                 tone=tone,
                 freq_hz=freq_fast,
-                duration_s=slot_duration_s,
+                start_tick=self._stream_lane_ticks[0],
+                duration_ticks=slot_ticks,
                 volume=volume,
-                channel=0,
                 source="stream_music",
-                start_delay_ticks=self._stream_pending_delay_ticks[0],
             )
-            self._stream_pending_delay_ticks[0] = 0
+        self._stream_lane_ticks[0] += slot_ticks
         if slow_present:
             if slow_is_carrier:
                 tone = "T"
@@ -6084,16 +6094,16 @@ class AlienEvolutionPort(StatefulManifestRuntime, AlienEvolutionData, ZXSpectrum
             else:
                 tone = "S"
                 volume = 4 if fast_present and not fast_is_carrier else 5
-            self.emit_audio(
+            self.emit_note_event(
+                lane=1,
                 tone=tone,
                 freq_hz=freq_slow,
-                duration_s=slot_duration_s,
+                start_tick=self._stream_lane_ticks[1],
+                duration_ticks=slot_ticks,
                 volume=volume,
-                channel=1,
                 source="stream_music",
-                start_delay_ticks=self._stream_pending_delay_ticks[1],
             )
-            self._stream_pending_delay_ticks[1] = 0
+        self._stream_lane_ticks[1] += slot_ticks
         return int(total_clock_units)
 
     # ZX 0xFC82..0xFC9F
@@ -6118,8 +6128,8 @@ class AlienEvolutionPort(StatefulManifestRuntime, AlienEvolutionData, ZXSpectrum
         duration_s = float(total_clock_units) / 3_500_000.0
         if duration_s > 0.0:
             slot_ticks = self._quantize_stream_slot_ticks(duration_s)
-            self._stream_pending_delay_ticks[0] += slot_ticks
-            self._stream_pending_delay_ticks[1] += slot_ticks
+            self._stream_lane_ticks[0] += slot_ticks
+            self._stream_lane_ticks[1] += slot_ticks
 
         return total_clock_units
 
@@ -6164,8 +6174,7 @@ class AlienEvolutionPort(StatefulManifestRuntime, AlienEvolutionData, ZXSpectrum
     def bitstream_pulse_generator(self, C_repeat, D_bits) -> int:
         C_repeat &= 0xFF
         D_bits &= 0xFF
-        self._ensure_stream_pending_delay_slots()
-        pending_delay_ticks = max(0, int(self._stream_pending_delay_ticks[0]))
+        self._ensure_stream_lane_slots()
         density = float(D_bits.bit_count()) / 8.0
 
         # FD0E path timing model (cycle-checked against the Z80 routine at 0xFD0E):
@@ -6187,8 +6196,8 @@ class AlienEvolutionPort(StatefulManifestRuntime, AlienEvolutionData, ZXSpectrum
         # If D contains no set bits, the original routine never reaches OUT (0xFE),A:
         # it is a timed silent segment. Preserve timing without emitting noise.
         if density <= 0.0:
-            self._stream_pending_delay_ticks[0] += slot_ticks
-            self._stream_pending_delay_ticks[1] += slot_ticks
+            self._stream_lane_ticks[0] += slot_ticks
+            self._stream_lane_ticks[1] += slot_ticks
             return int(total_clock_units)
 
         # Model perceived latch "edge rate" as half of update rate.
@@ -6196,10 +6205,6 @@ class AlienEvolutionPort(StatefulManifestRuntime, AlienEvolutionData, ZXSpectrum
         freq_hz = active_updates / (2.0 * max(duration_s, 1e-6))
         if freq_hz < 120.0:
             freq_hz = 120.0
-
-        # Special-command path replaces the normal two-divider mixer loop.
-        # Advance the other semantic channel so we don't create artificial overlap.
-        self._stream_pending_delay_ticks[1] += slot_ticks
 
         # Keep noise conservative; raw Pyxel noise is perceptually denser than
         # Spectrum beeper hash through a small speaker.
@@ -6209,16 +6214,17 @@ class AlienEvolutionPort(StatefulManifestRuntime, AlienEvolutionData, ZXSpectrum
         if volume > 3:
             volume = 3
 
-        self.emit_audio(
+        self.emit_note_event(
+            lane=0,
             tone="N",
             freq_hz=freq_hz,
-            duration_s=duration_s,
+            start_tick=self._stream_lane_ticks[0],
+            duration_ticks=slot_ticks,
             volume=volume,
-            channel=0,
             source="stream_special",
-            start_delay_ticks=pending_delay_ticks,
         )
-        self._stream_pending_delay_ticks[0] = 0
+        self._stream_lane_ticks[0] += slot_ticks
+        self._stream_lane_ticks[1] += slot_ticks
         return int(total_clock_units)
 
     # ZX 0xFD4B..0xFD69
@@ -6240,7 +6246,7 @@ class AlienEvolutionPort(StatefulManifestRuntime, AlienEvolutionData, ZXSpectrum
     # ZX 0xFD6A..0xFD82
     def fn_low_level_tone_delay_primitive(self, HL_delay) -> tuple[int, int]:
         HL_delay = HL_delay & 0xFFFF
-        self._ensure_stream_pending_delay_slots()
+        self._ensure_stream_lane_slots()
         # ASM computes C from the original L byte:
         # LD A,L ; SRL L ; SRL L ; CPL ; AND 03 ; LD C,A.
         # So variant index comes from ~orig_L low 2 bits (not from shifted L).
@@ -6249,26 +6255,31 @@ class AlienEvolutionPort(StatefulManifestRuntime, AlienEvolutionData, ZXSpectrum
         A_tone = self.var_stream_cmd_byte_2 & 0xFF
         period = (0x00D1 + C_variant + (A_tone & 0x0F)) & 0xFFFF
         ticks = ((HL_delay >> 8) & 0xFF) | 0x01
-        start_delay = max(0, int(self._stream_pending_delay_ticks[0]))
-        self.emit_rom_beeper(
-            period=period,
-            ticks=ticks,
+        p = max(1, int(period) & 0xFFFF)
+        waves = max(1, int(ticks) & 0xFFFF)
+        half_period_t = 4.0 * (float(p) + 30.125)
+        full_period_t = 2.0 * half_period_t
+        freq = 3_500_000.0 / full_period_t
+        duration_s = float(waves) / freq
+        duration_ticks = self._duration_ticks_from_seconds(duration_s)
+        self.emit_note_event(
+            lane=0,
             tone="S",
+            freq_hz=freq,
+            start_tick=self._stream_lane_ticks[0],
+            duration_ticks=duration_ticks,
             volume=5,
-            channel=0,
             source="stream_special",
-            start_delay_ticks=start_delay,
         )
-        self._stream_pending_delay_ticks[0] = 0
+        self._stream_lane_ticks[0] += duration_ticks
         self._interrupts_enabled = False
         # Carry from ROM tone path (03D4) is not modeled in service layer yet.
         # Timing estimate uses the same ROM 0x03B5 model as runtime emit_rom_beeper.
         per_wave_clock_units = 8.0 * (float(period) + 30.125)
         timing_cost = int(round(float(ticks) * per_wave_clock_units))
-        duration_s = float(timing_cost) / 3_500_000.0
         if duration_s > 0.0:
             slot_ticks = self._quantize_stream_slot_ticks(duration_s)
-            self._stream_pending_delay_ticks[1] += slot_ticks
+            self._stream_lane_ticks[1] += slot_ticks
         return 0, timing_cost
 
     # ZX 0xFE69..0xFFCD

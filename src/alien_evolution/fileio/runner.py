@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import Protocol, TextIO
 
 from .rzx import RZXFrameInputIterator
-from ..zx.runtime import AudioCommand, FrameInput, FrameStepRuntime, StepOutput
+from ..zx.runtime import AudioEvent, AudioNoteEvent, AudioResetEvent, FrameInput, FrameStepRuntime, StepOutput
 
 _FILEIO_FORMAT = "alien-evolution-fileio-v2"
 
@@ -85,16 +85,28 @@ def load_frame_inputs(path: Path | None) -> list[FrameInput]:
     return list(iter_jsonl_frame_inputs_from_path(path))
 
 
-def _audio_to_dict(cmd: AudioCommand) -> dict[str, object]:
-    return {
-        "tone": cmd.tone,
-        "freq_hz": cmd.freq_hz,
-        "duration_s": cmd.duration_s,
-        "volume": cmd.volume,
-        "channel": cmd.channel,
-        "source": cmd.source,
-        "start_delay_ticks": cmd.start_delay_ticks,
-    }
+def _audio_to_dict(event: AudioEvent) -> dict[str, object]:
+    if isinstance(event, AudioNoteEvent):
+        return {
+            "type": "note",
+            "epoch_id": event.epoch_id,
+            "start_tick": event.start_tick,
+            "duration_ticks": event.duration_ticks,
+            "lane": event.lane,
+            "tone": event.tone,
+            "freq_hz": event.freq_hz,
+            "volume": event.volume,
+            "source": event.source,
+            "priority": event.priority,
+        }
+    if isinstance(event, AudioResetEvent):
+        return {
+            "type": "reset",
+            "epoch_id": event.epoch_id,
+            "cut_tick": event.cut_tick,
+            "next_epoch_id": event.next_epoch_id,
+        }
+    raise TypeError(f"Unsupported audio event: {type(event)!r}")
 
 
 def _step_output_to_dict(output: StepOutput) -> dict[str, object]:
@@ -104,7 +116,7 @@ def _step_output_to_dict(output: StepOutput) -> dict[str, object]:
         "flash_phase": output.flash_phase & 0x01,
         "screen_bitmap_hex": bytes(output.screen_bitmap).hex(),
         "screen_attrs_hex": bytes(output.screen_attrs).hex(),
-        "audio_commands": [_audio_to_dict(cmd) for cmd in output.audio_commands],
+        "audio_events": [_audio_to_dict(event) for event in output.audio_events],
         "timing": {
             "delay_after_step_frames": delay_after_step_frames,
         },

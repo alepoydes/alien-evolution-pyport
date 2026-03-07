@@ -5,7 +5,7 @@ import json
 import unittest
 
 from alien_evolution.fileio.runner import run_frame_loop
-from alien_evolution.zx.runtime import AudioCommand, FrameInput, StepOutput
+from alien_evolution.zx.runtime import AudioNoteEvent, FrameInput, StepOutput
 
 
 class _SingleFrameRuntime:
@@ -23,15 +23,17 @@ class _SingleFrameRuntime:
             screen_bitmap=b"",
             screen_attrs=b"",
             flash_phase=0,
-            audio_commands=(
-                AudioCommand(
+            audio_events=(
+                AudioNoteEvent(
+                    epoch_id=0,
+                    start_tick=7,
+                    duration_ticks=12,
+                    lane=0,
                     tone="S",
                     freq_hz=440.0,
-                    duration_s=0.1,
                     volume=5,
-                    channel=0,
                     source="stream_music",
-                    start_delay_ticks=7,
+                    priority=10,
                 ),
             ),
             border_color=0,
@@ -39,7 +41,7 @@ class _SingleFrameRuntime:
 
 
 class FileIORunnerTests(unittest.TestCase):
-    def test_run_frame_loop_jsonl_includes_start_delay_ticks(self) -> None:
+    def test_run_frame_loop_jsonl_includes_audio_event_ticks(self) -> None:
         runtime = _SingleFrameRuntime()
         sink = io.StringIO()
 
@@ -59,7 +61,7 @@ class FileIORunnerTests(unittest.TestCase):
         self.assertEqual(len(lines), 2)
         frame_record = json.loads(lines[1])
         self.assertEqual(
-            frame_record["output"]["audio_commands"][0]["start_delay_ticks"],
+            frame_record["output"]["audio_events"][0]["start_tick"],
             7,
         )
 

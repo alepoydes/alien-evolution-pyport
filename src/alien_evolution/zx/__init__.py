@@ -17,7 +17,10 @@ from .screen import (
 )
 from .runtime import (
     FrameInput,
-    AudioCommand,
+    AudioClockSnapshot,
+    AudioEvent,
+    AudioNoteEvent,
+    AudioResetEvent,
     StepTiming,
     StepOutput,
     FrameStepRuntime,
@@ -37,7 +40,10 @@ __all__ = [
     "zx_attr_index",
     "ZX_PALETTE_16",
     "FrameInput",
-    "AudioCommand",
+    "AudioClockSnapshot",
+    "AudioEvent",
+    "AudioNoteEvent",
+    "AudioResetEvent",
     "StepTiming",
     "StepOutput",
     "FrameStepRuntime",

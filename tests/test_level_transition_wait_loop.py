@@ -50,8 +50,8 @@ class TransitionWaitLoopAudioSpy(AlienEvolutionPort):
         self.per_frame_audio_counts: list[int] = []
 
     def _yield_frame(self) -> None:
-        self.per_frame_audio_counts.append(len(self._audio_commands))
-        self._audio_commands.clear()
+        self.per_frame_audio_counts.append(len(self._audio_events))
+        self._audio_events.clear()
 
 
 class LevelTransitionWaitLoopTests(unittest.TestCase):

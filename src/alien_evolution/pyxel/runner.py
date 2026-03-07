@@ -226,7 +226,7 @@ def run_pyxel_game(
             screen_bitmap=bytes(ZX_BITMAP_BYTES),
             screen_attrs=bytes([0x07] * ZX_ATTR_BYTES),
             flash_phase=0,
-            audio_commands=(),
+            audio_events=(),
             border_color=0,
         )
     redraw_required = True
@@ -356,7 +356,7 @@ def run_pyxel_game(
                 screen_bitmap=last_output.screen_bitmap,
                 screen_attrs=last_output.screen_attrs,
                 flash_phase=next_flash_phase,
-                audio_commands=(),
+                audio_events=(),
                 border_color=next_border_color,
                 timing=StepTiming(delay_after_step_frames=0),
             )
@@ -374,7 +374,7 @@ def run_pyxel_game(
                     screen_bitmap=last_output.screen_bitmap,
                     screen_attrs=last_output.screen_attrs,
                     flash_phase=next_flash_phase,
-                    audio_commands=(),
+                    audio_events=(),
                     border_color=next_border_color,
                     timing=StepTiming(delay_after_step_frames=0),
                 )
@@ -433,7 +433,7 @@ def run_pyxel_game(
                 )
                 history.force_capture(stateful_runtime, host_frame_index=host_frame_index)
             _push_screen_message(f"Cheat: {cheat_text}")
-            audio_player.update()
+            audio_player.update(now_s=now_s)
             return
 
         remaining_host_frames = elapsed_host_frames
@@ -444,16 +444,23 @@ def run_pyxel_game(
                 _advance_delay_host_frame(skip_heavy_ops=(idx + 1) < consumed_delay_frames)
             remaining_host_frames -= consumed_delay_frames
             if pending_delay_frames > 0 or remaining_host_frames <= 0:
-                audio_player.update()
+                audio_player.update(now_s=now_s)
                 if history is not None and stateful_runtime is not None:
                     history.maybe_capture(stateful_runtime, host_frame_index=host_frame_index)
                 return
 
         # Keep runtime workload stable: do at most one gameplay step per callback.
-        last_output = runtime.step(read_frame_input())
+        input_snapshot = read_frame_input()
+        audio_clock = audio_player.clock_snapshot(now_s=now_s)
+        frame_input = type(input_snapshot)(
+            joy_kempston=input_snapshot.joy_kempston,
+            keyboard_rows=input_snapshot.keyboard_rows,
+            audio_clock=audio_clock,
+        )
+        last_output = runtime.step(frame_input)
         redraw_required = True
         pending_delay_frames = max(0, int(last_output.timing.delay_after_step_frames))
-        audio_player.submit(last_output.audio_commands)
+        audio_player.submit(last_output.audio_events)
         remaining_host_frames -= 1
 
         if remaining_host_frames > 0 and pending_delay_frames > 0:
@@ -461,7 +468,7 @@ def run_pyxel_game(
             for idx in range(consumed_delay_frames):
                 _advance_delay_host_frame(skip_heavy_ops=(idx + 1) < consumed_delay_frames)
 
-        audio_player.update()
+        audio_player.update(now_s=now_s)
         if history is not None and stateful_runtime is not None:
             history.maybe_capture(stateful_runtime, host_frame_index=host_frame_index)
 
