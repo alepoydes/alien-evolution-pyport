@@ -13,7 +13,7 @@ from ..zx.screen import ZX_ATTR_BYTES, ZX_BITMAP_BYTES, ZX_SCREEN_H, ZX_SCREEN_W
 from ..zx.state import StatefulRuntime, ensure_stateful_runtime
 from .input import read_frame_input, typed_command_chars
 from .screen import apply_zx_palette, blit_zx_screen_to_pyxel
-from .sound import PyxelAudioPlayer
+from .sound import AudioDebugStats, PyxelAudioPlayer
 
 DEFAULT_HISTORY_INTERVAL_HOST_FRAMES = 500
 DEFAULT_HISTORY_MAX_CHECKPOINTS = 120
@@ -29,6 +29,22 @@ def _save_autosave_state(runtime: StatefulRuntime) -> dict[str, object]:
         if isinstance(state, dict):
             return state
     return runtime.save_state()
+
+
+def _format_audio_debug_overlay_lines(stats: AudioDebugStats) -> tuple[str, ...]:
+    total_lost_ticks = (
+        int(stats.late_head_ticks_lost)
+        + int(stats.fully_missed_ticks)
+        + int(stats.saturation_dropped_ticks)
+    )
+    return (
+        f"AUD ep={int(stats.active_epoch_id)} tick={int(stats.current_playhead_tick)} loss={total_lost_ticks}t",
+        (
+            f"late={int(stats.late_head_ticks_lost)}t/{int(stats.late_partially_played_events)}e "
+            f"miss={int(stats.fully_missed_ticks)}t/{int(stats.fully_missed_events)}e "
+            f"sat={int(stats.saturation_dropped_ticks)}t/{int(stats.saturation_dropped_events)}e"
+        ),
+    )
 
 
 @dataclass(frozen=True)
@@ -190,6 +206,9 @@ def run_pyxel_game(
     audio_player = PyxelAudioPlayer()
     pending_delay_frames = 0
     host_frame_index = 0
+    audio_debug_overlay_enabled = False
+    audio_debug_lines: tuple[str, ...] = ()
+    audio_debug_hotkeys_enabled = bool(dev_tools and sys.platform != "emscripten")
     screen_messages: ScreenMessageQueue | None = None
     quicksave_file: Path | None = None
     if dev_tools:
@@ -256,10 +275,29 @@ def run_pyxel_game(
         screen_messages.push(text, host_frame_index=host_frame_index)
         redraw_required = True
 
+    def _refresh_audio_debug_overlay() -> None:
+        nonlocal audio_debug_lines, redraw_required
+        if not audio_debug_overlay_enabled:
+            if audio_debug_lines:
+                audio_debug_lines = ()
+                redraw_required = True
+            return
+        lines = _format_audio_debug_overlay_lines(audio_player.debug_stats())
+        if lines != audio_debug_lines:
+            audio_debug_lines = lines
+            redraw_required = True
+
     def _handle_state_hotkeys() -> None:
         nonlocal pending_delay_frames, history, redraw_required
+        nonlocal audio_debug_overlay_enabled, audio_debug_lines
         if not dev_tools:
             return
+        if audio_debug_hotkeys_enabled and hasattr(pyxel, "KEY_F3") and pyxel.btnp(pyxel.KEY_F3):
+            audio_debug_overlay_enabled = not audio_debug_overlay_enabled
+            if not audio_debug_overlay_enabled:
+                audio_debug_lines = ()
+            redraw_required = True
+            _push_screen_message(f"Audio debug {'on' if audio_debug_overlay_enabled else 'off'}")
         if hasattr(pyxel, "KEY_F10") and pyxel.btnp(pyxel.KEY_F10):
             try:
                 runtime.reset()
@@ -434,6 +472,7 @@ def run_pyxel_game(
                 history.force_capture(stateful_runtime, host_frame_index=host_frame_index)
             _push_screen_message(f"Cheat: {cheat_text}")
             audio_player.update(now_s=now_s)
+            _refresh_audio_debug_overlay()
             return
 
         remaining_host_frames = elapsed_host_frames
@@ -445,6 +484,7 @@ def run_pyxel_game(
             remaining_host_frames -= consumed_delay_frames
             if pending_delay_frames > 0 or remaining_host_frames <= 0:
                 audio_player.update(now_s=now_s)
+                _refresh_audio_debug_overlay()
                 if history is not None and stateful_runtime is not None:
                     history.maybe_capture(stateful_runtime, host_frame_index=host_frame_index)
                 return
@@ -469,6 +509,7 @@ def run_pyxel_game(
                 _advance_delay_host_frame(skip_heavy_ops=(idx + 1) < consumed_delay_frames)
 
         audio_player.update(now_s=now_s)
+        _refresh_audio_debug_overlay()
         if history is not None and stateful_runtime is not None:
             history.maybe_capture(stateful_runtime, host_frame_index=host_frame_index)
 
@@ -491,6 +532,10 @@ def run_pyxel_game(
         if screen_messages is not None:
             for idx, message in enumerate(screen_messages.messages):
                 pyxel.text(text_x, text_y + idx * row_height, message, 10)
+        if audio_debug_lines:
+            overlay_y = height - (len(audio_debug_lines) * row_height) - 4
+            for idx, line in enumerate(audio_debug_lines):
+                pyxel.text(text_x, overlay_y + idx * row_height, line, 7)
         redraw_required = False
 
     quit_key = getattr(pyxel, "KEY_NONE", None) if sys.platform == "emscripten" else None

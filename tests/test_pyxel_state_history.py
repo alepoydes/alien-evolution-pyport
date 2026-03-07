@@ -2,12 +2,14 @@ from __future__ import annotations
 
 import unittest
 
+from alien_evolution.pyxel.sound import AudioDebugStats
 from alien_evolution.pyxel.runner import (
     CheatCommandBuffer,
     DEFAULT_QUICKSAVE_FILENAME,
     DEFAULT_HISTORY_INTERVAL_HOST_FRAMES,
     RuntimeStateHistory,
     ScreenMessageQueue,
+    _format_audio_debug_overlay_lines,
     _maybe_apply_runtime_cheat,
 )
 
@@ -95,6 +97,23 @@ class ScreenMessageQueueTests(unittest.TestCase):
 
         queue.prune(host_frame_index=4)
         self.assertEqual(queue.messages, ("newest",))
+
+    def test_audio_debug_overlay_line_formats_loss_breakdown(self) -> None:
+        lines = _format_audio_debug_overlay_lines(
+            AudioDebugStats(
+                late_head_ticks_lost=5,
+                late_partially_played_events=2,
+                fully_missed_events=3,
+                fully_missed_ticks=7,
+                saturation_dropped_events=1,
+                saturation_dropped_ticks=11,
+                active_epoch_id=4,
+                current_playhead_tick=99,
+            )
+        )
+
+        self.assertEqual(lines[0], "AUD ep=4 tick=99 loss=23t")
+        self.assertEqual(lines[1], "late=5t/2e miss=7t/3e sat=11t/1e")
 
 
 class CheatCommandBufferTests(unittest.TestCase):
