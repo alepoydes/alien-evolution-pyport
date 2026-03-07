@@ -50,6 +50,8 @@ _DEFAULT_CUBE_FAST_MASK_PAIRS: tuple[tuple[int, int], ...] = (
 # Keep Pyxel at 50 FPS, but run gameplay simulation/render cadence slower to
 # better match observed original pacing without touching menu/UI frame timing.
 GAMEPLAY_FRAME_DIVIDER: int = 5
+_AUDIO_TICKS_PER_SECOND: int = 120
+_HOST_FRAMES_PER_SECOND: int = 50
 
 # Stream interpreter throughput budget per host frame. This keeps menu/intro
 # stream progression close to original pacing without tying gameplay loop speed
@@ -744,6 +746,26 @@ class AlienEvolutionPort(StatefulManifestRuntime, AlienEvolutionData, ZXSpectrum
             )
             cursor_tick += self._rom_beeper_duration_ticks(de_ticks=de_ticks, hl_period=hl_period)
         return total_timing_cost
+
+    @staticmethod
+    def _audio_ticks_for_host_frames(host_frames: int) -> int:
+        frames = max(0, int(host_frames))
+        return (frames * _AUDIO_TICKS_PER_SECOND + (_HOST_FRAMES_PER_SECOND // 2)) // _HOST_FRAMES_PER_SECOND
+
+    def _queue_teleport_audio_frame_burst(self, *, de_ticks: int, hl_period: int) -> None:
+        start_tick = self.current_audio_tick()
+        frame_count = max(1, int(GAMEPLAY_FRAME_DIVIDER))
+        period = hl_period & 0xFFFF
+        ticks = de_ticks & 0xFFFF
+        for host_frame_idx in range(frame_count):
+            self.emit_rom_beeper(
+                period=period,
+                ticks=ticks,
+                waveform="S",
+                effect="N",
+                priority=35,
+                start_tick=start_tick + self._audio_ticks_for_host_frames(host_frame_idx),
+            )
 
     @staticmethod
     def _rla(a: int, carry_in: int) -> tuple[int, int]:
@@ -3321,7 +3343,7 @@ class AlienEvolutionPort(StatefulManifestRuntime, AlienEvolutionData, ZXSpectrum
         HL_cell = self.var_runtime_current_cell_ptr
         A_cell = self._read_u8_ptr(HL_cell)
         self._write_u8_ptr(HL_cell, (A_cell & 0xC0) | 0x1D)
-        self._rom_beeper(de_ticks=0x0014, hl_period=0x01F4)
+        self._queue_teleport_audio_frame_burst(de_ticks=0x0014, hl_period=0x01F4)
         self.var_runtime_objective_counter = ((self.var_runtime_objective_counter & 0xFF) - 0x01) & 0xFF
         return self.fn_hud_strip_painter()
 
@@ -3334,7 +3356,7 @@ class AlienEvolutionPort(StatefulManifestRuntime, AlienEvolutionData, ZXSpectrum
             self._write_u8_ptr(hl_cell, (cell & 0xC0) | a_code)
             state = self.var_runtime_move_state_code & 0xFF
             self.var_runtime_move_state_code = (state + 0x01) & 0xFF
-            self._rom_beeper(de_ticks=0x000F, hl_period=0x0190)
+            self._queue_teleport_audio_frame_burst(de_ticks=0x000F, hl_period=0x0190)
             return
 
         self.var_runtime_move_state_code = 0x1C

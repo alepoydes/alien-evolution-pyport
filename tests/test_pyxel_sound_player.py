@@ -112,6 +112,7 @@ class PyxelSoundTimelineTests(unittest.TestCase):
         self.assertEqual(events[0].epoch_id, 0)
         self.assertEqual(events[0].start_tick, 12)
         self.assertEqual(events[0].waveform, "S")
+        self.assertEqual(events[0].effect, "N")
         self.assertEqual(events[1].epoch_id, 0)
         self.assertEqual(events[1].cut_tick, 20)
         self.assertEqual(events[1].next_epoch_id, 1)
@@ -138,6 +139,7 @@ class PyxelSoundTimelineTests(unittest.TestCase):
         assert isinstance(event, AudioNoteEvent)
         self.assertEqual(event.start_tick, 17)
         self.assertEqual(event.waveform, "S")
+        self.assertEqual(event.effect, "N")
         self.assertEqual(event.source, "rom_beeper")
 
     def test_stream_silence_advances_other_voice_cursor(self) -> None:
@@ -202,6 +204,54 @@ class PyxelSoundTimelineTests(unittest.TestCase):
             events[1].start_tick,
             10 + runtime._rom_beeper_duration_ticks(de_ticks=0x0032, hl_period=0x0032),
         )
+
+    def test_teleport_entry_queues_audio_for_each_host_frame(self) -> None:
+        runtime = AlienEvolutionPort()
+        runtime.begin_frame(
+            FrameInput(
+                audio_clock=AudioClockSnapshot(current_epoch_id=0, current_tick=10),
+            )
+        )
+        runtime.var_runtime_current_cell_ptr = BlockPtr(runtime.var_level_map_mode_0, 0x0000)
+        runtime.var_level_map_mode_0[0] = 0x00
+        runtime.fn_hud_strip_painter = lambda: None  # type: ignore[assignment]
+
+        runtime.state_29_handler()
+        events = runtime.end_frame().audio_events
+
+        note_events = [event for event in events if isinstance(event, AudioNoteEvent)]
+        self.assertEqual([event.start_tick for event in note_events], [10, 12, 15, 17, 20])
+        self.assertTrue(all(event.waveform == "S" for event in note_events))
+        self.assertTrue(all(event.effect == "N" for event in note_events))
+
+    def test_backend_uses_effect_from_event_without_short_note_autofade(self) -> None:
+        fake_pyxel = _FakePyxel()
+        player = PyxelAudioPlayer()
+        player._epoch_origin_time_s = 10.0
+        player.submit(
+            (
+                AudioNoteEvent(
+                    epoch_id=0,
+                    start_tick=0,
+                    duration_ticks=2,
+                    waveform="S",
+                    effect="N",
+                    freq_hz=1017.0,
+                    volume=5,
+                    source="rom_beeper",
+                    priority=30,
+                ),
+            ),
+            now_s=10.0,
+        )
+
+        with patch.dict(sys.modules, {"pyxel": fake_pyxel}):
+            player.update(now_s=10.0)
+
+        set_calls = [call for sound in fake_pyxel.sounds for call in sound.calls if call.get("notes") != "R"]
+        self.assertEqual(len(set_calls), 1)
+        self.assertEqual(set_calls[0]["tones"], "S")
+        self.assertEqual(set_calls[0]["effects"], "N")
 
     def test_clock_snapshot_follows_monotonic_time(self) -> None:
         player = PyxelAudioPlayer()

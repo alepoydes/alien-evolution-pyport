@@ -30,6 +30,7 @@ class _ChannelSegment:
     is_rest: bool
     ticks: int
     waveform: str
+    effect: str
     freq_hz: float
     volume: int
     source: str
@@ -117,6 +118,7 @@ def _normalized_note_event(event: AudioNoteEvent) -> AudioNoteEvent:
         start_tick=event.start_tick,
         duration_ticks=event.duration_ticks,
         waveform=waveform,
+        effect=str(event.effect or "N").upper(),
         freq_hz=freq,
         volume=max(0, min(7, int(event.volume))),
         source=str(event.source or "generic"),
@@ -134,19 +136,14 @@ def _sound_set_from_segment(slot: int, segment: _ChannelSegment) -> None:
         volumes = "0"
         effects = "N"
     else:
-        is_stream_special_noise = segment.waveform == "N" and segment.source == "stream_special"
         if segment.waveform == "N":
-            note = (
-                _stream_special_noise_note_from_hz(segment.freq_hz)
-                if is_stream_special_noise
-                else _noise_note_from_hz(segment.freq_hz)
-            )
+            note = _noise_note_from_hz(segment.freq_hz)
         else:
             note = _note_from_hz(segment.freq_hz)
         notes = note
         tones = segment.waveform if segment.waveform in _AUDIO_WAVEFORMS else "S"
         volumes = str(segment.volume)
-        effects = "N" if is_stream_special_noise else ("F" if (ticks <= 2 or segment.waveform == "N") else "N")
+        effects = str(segment.effect or "N").upper()
 
     pyxel.sounds[slot].set(
         notes=notes,
@@ -172,6 +169,7 @@ def beep(
         is_rest=False,
         ticks=ticks,
         waveform=str(waveform or "S").upper(),
+        effect="N",
         freq_hz=float(freq_hz),
         volume=volume,
         source="generic",
@@ -449,6 +447,7 @@ class PyxelAudioPlayer:
                         is_rest=True,
                         ticks=run_ticks,
                         waveform="N",
+                        effect="N",
                         freq_hz=20.0,
                         volume=0,
                         source="rest",
@@ -465,6 +464,7 @@ class PyxelAudioPlayer:
                         is_rest=False,
                         ticks=run_ticks,
                         waveform=note.event.waveform,
+                        effect=note.event.effect,
                         freq_hz=note.event.freq_hz,
                         volume=note.event.volume,
                         source=note.event.source,
@@ -502,6 +502,7 @@ class PyxelAudioPlayer:
                         is_rest=segment.is_rest,
                         ticks=ticks - elapsed,
                         waveform=segment.waveform,
+                        effect=segment.effect,
                         freq_hz=segment.freq_hz,
                         volume=segment.volume,
                         source=segment.source,
@@ -530,6 +531,7 @@ class PyxelAudioPlayer:
                         is_rest=segment.is_rest,
                         ticks=part_ticks,
                         waveform=segment.waveform,
+                        effect=segment.effect,
                         freq_hz=segment.freq_hz,
                         volume=segment.volume,
                         source=segment.source,

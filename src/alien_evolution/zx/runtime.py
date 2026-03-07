@@ -8,9 +8,11 @@ from .state import StatefulRuntime as _StatefulRuntime
 from .screen import ZX_ATTR_BYTES, ZX_BITMAP_BYTES
 
 _AUDIO_WAVEFORMS: Final[frozenset[str]] = frozenset({"S", "T", "P", "N"})
+_AUDIO_EFFECTS: Final[frozenset[str]] = frozenset({"N", "S", "V", "F", "H", "Q"})
 _DEFAULT_KEYBOARD_ROWS: Final[tuple[int, ...]] = (0xFF,) * 8
 
 AudioWaveform: TypeAlias = Literal["S", "T", "P", "N"]
+AudioEffect: TypeAlias = Literal["N", "S", "V", "F", "H", "Q"]
 
 
 def _default_audio_priority(source: str) -> int:
@@ -58,6 +60,7 @@ class AudioNoteEvent:
     duration_ticks: int
     waveform: AudioWaveform
     freq_hz: float
+    effect: AudioEffect = "N"
     volume: int = 7
     source: str = "generic"
     priority: int = 25
@@ -77,6 +80,11 @@ class AudioNoteEvent:
             waveform_s = "S"
         if waveform_s != self.waveform:
             object.__setattr__(self, "waveform", waveform_s)
+        effect_s = str(self.effect or "N").upper()
+        if effect_s not in _AUDIO_EFFECTS:
+            effect_s = "N"
+        if effect_s != self.effect:
+            object.__setattr__(self, "effect", effect_s)
         source_s = str(self.source or "generic")
         if source_s != self.source:
             object.__setattr__(self, "source", source_s)
@@ -307,6 +315,7 @@ class ZXSpectrumServiceLayer:
         self,
         *,
         waveform: AudioWaveform,
+        effect: AudioEffect = "N",
         freq_hz: float,
         start_tick: int,
         duration_ticks: int,
@@ -321,6 +330,7 @@ class ZXSpectrumServiceLayer:
             start_tick=start_tick,
             duration_ticks=duration_ticks,
             waveform=waveform,
+            effect=effect,
             freq_hz=float(freq_hz),
             volume=volume,
             source=source,
@@ -344,6 +354,7 @@ class ZXSpectrumServiceLayer:
         self,
         *,
         waveform: AudioWaveform,
+        effect: AudioEffect = "N",
         freq_hz: float,
         duration_s: float,
         volume: int,
@@ -360,6 +371,7 @@ class ZXSpectrumServiceLayer:
             start = max(0, int(start_tick))
         self.emit_note_event(
             waveform=waveform,
+            effect=effect,
             freq_hz=freq_hz,
             start_tick=start,
             duration_ticks=duration_ticks,
@@ -373,6 +385,7 @@ class ZXSpectrumServiceLayer:
         self,
         *,
         waveform: AudioWaveform,
+        effect: AudioEffect = "N",
         freq_hz: float,
         duration_ticks: int,
         volume: int,
@@ -384,6 +397,7 @@ class ZXSpectrumServiceLayer:
         start_tick = self.current_audio_tick(epoch_id=epoch)
         self.emit_note_event(
             waveform=waveform,
+            effect=effect,
             freq_hz=freq_hz,
             start_tick=start_tick,
             duration_ticks=duration_ticks,
@@ -430,6 +444,7 @@ class ZXSpectrumServiceLayer:
         period: int,
         ticks: int,
         waveform: AudioWaveform = "S",
+        effect: AudioEffect = "N",
         *,
         volume: int = 5,
         source: str = "rom_beeper",
@@ -442,6 +457,7 @@ class ZXSpectrumServiceLayer:
         duration = float(waves) / freq
         self.emit_audio(
             waveform=waveform,
+            effect=effect,
             freq_hz=freq,
             duration_s=duration,
             volume=volume,

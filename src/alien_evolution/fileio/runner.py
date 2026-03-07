@@ -93,6 +93,7 @@ def _audio_to_dict(event: AudioEvent) -> dict[str, object]:
             "start_tick": event.start_tick,
             "duration_ticks": event.duration_ticks,
             "waveform": event.waveform,
+            "effect": event.effect,
             "freq_hz": event.freq_hz,
             "volume": event.volume,
             "source": event.source,
