@@ -323,7 +323,7 @@ Two important consequences:
 - Teleport pads live in that blocked low-code range, so aliens do **not** use them.
 - Most weapon/effect tiles are *not* treated as hard obstacles by the mover itself; the consequence is handled by the effect system after or around the move.
 
-The “pick a new direction” part is **not true randomness**. It is a deterministic frame-based chooser tied to the frame counter. In practice it feels like a lightweight random turn rule, but if you reproduce the same situation on the same frame timing, you can get the same turn.
+The “pick a new direction” part is **not true randomness**. The ZX routine seeds it from `LD A,R`, so in the port it follows the shared approximate R-register sequence rather than the frame counter. In practice it still feels like a lightweight deterministic turn rule, but repeated fallback calls inside one gameplay frame do **not** all have to pick the same turn.
 
 ### Adult / Phase 3 logic
 
@@ -342,7 +342,8 @@ The crucial correction to the old description is the fallback rule:
 - The adult does **not** calculate a route to the player’s current position.
 - When it needs a new direction, it first looks at the **player’s last move delta**.
 - If the copied lane passes the same immediate/two-tiles-ahead checks, the adult changes state to that direction and waits for its next turn.
-- If even that copied lane is rejected, it falls back to the same deterministic frame-based direction chooser used by the roamers.
+- If even that copied lane is rejected, it falls back to the same deterministic R-seeded direction chooser used by the roamers.
+- At the start of gameplay there is **no prior player move yet** (`move_delta == 0x0000`), so the first forced retarget goes straight to that chooser until the player has moved at least once.
 
 So the adult is best described as **“keep going until forced to retarget; then try to copy the player’s most recent heading”**, not as a true coordinate-seeking chaser. That is why on level 1 it often does **not** feel like it is directly homing in on you.
 

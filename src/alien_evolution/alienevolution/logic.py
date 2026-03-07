@@ -3695,7 +3695,10 @@ class AlienEvolutionPort(StatefulManifestRuntime, AlienEvolutionData, ZXSpectrum
 
     def _queue_ai_random_fallback_state(self, A_state: int, BC_cell: BlockPtr) -> tuple[int, BlockPtr]:
         bc_cell = BC_cell
-        b = (self.frame_counter + 0x01) & 0xFF
+        # ZX 0xE7F4 uses `LD A,R`, not a frame counter. Multiple fallback calls
+        # can happen inside one gameplay frame, so a per-use entropy source is
+        # closer to the original semantics than a shared per-frame value.
+        b = self._next_r_register() & 0xFF
         a = 0x11
         carry = 0
         # E7F3 uses DJNZ; when B starts at 0, it runs 256 iterations.
@@ -5290,10 +5293,10 @@ class AlienEvolutionPort(StatefulManifestRuntime, AlienEvolutionData, ZXSpectrum
             B_row = (B_row + 0x01) & 0xFF
         self.var_current_map_coords.set(HL_idx, B_row)
 
-        # 0xF3A3 stores A into low byte at 0xA8C6; here A carries low6 code
-        # of the found start cell (normally 0x21).
-        a_delta_seed = self._read_u8_ptr(HL_cell) & 0x3F
-        self.var_runtime_move_delta = (self.var_runtime_move_delta & 0xFF00) | a_delta_seed
+        # ZX 0xF3A3 stores A after the row/column conversion loop. At that
+        # point A is zero, so gameplay starts with "no prior move" until the
+        # player actually commits a movement step.
+        self.var_runtime_move_delta = 0x0000
         self.var_runtime_move_state_code = 0x1C
         # NOTE: original 0xF387 map-base immediate is represented semantically by typed active-map pointers.
 
