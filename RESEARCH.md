@@ -261,36 +261,297 @@ Two implementation details are worth noting:
 
 The stack fill trick is a classic Spectrum optimization: `PUSH` is fast, and it writes two bytes at once. Alien Evolution uses it aggressively.
 
-## Sound: ROM beeps and a two stream engine
+## Sound: ROM beeps, stream music, and splash noise cells
 
-The game uses the ROM `BEEPER` routine at `0x03B5` for short cues, but it also contains a custom stream player for longer sequences.
+Alien Evolution uses two distinct audio systems:
 
-The stream engine entry point is `scenario_intermission_beeper_stream_player_loop` at `0xFBCC`.
+* the Spectrum ROM `BEEPER` routine at `0x03B5` for short cues and paced helper calls
+* a custom stream engine at `0xFBCC` for menu music, gameplay splash audio, ending tail audio, and failure / cleanup audio
 
-### Stream structure
+The stream player entry point is `scenario_intermission_beeper_stream_player_loop` at `0xFBCC`.
+It is the part that matters for splash screens.
 
-The engine reads two byte streams in parallel, with pointers stored at `0xFBE7` and `0xFBEB`. Conceptually, this is channel A and channel B.
+### Stream presets and where splash audio comes from
 
-Each channel yields a command byte. The core interpreter is `stream_bytecode_interpreter_core` at `0xFC13`.
+There are three preset entry points:
 
-A byte value of `0x40` is treated as a terminator for that stream.
+* preset A at `0xF149`: pre-level gameplay splash and ending post-text tail
+* preset B at `0xF152`: front-end menu music
+* preset C at `0xF15B`: failure / cleanup return path
 
-Other bytes are interpreted as note selectors and duration selectors through tables starting at `0xFCA0`.
+Preset A is the one used by the gameplay splash screens discussed in this repository.
+Its raw byte streams live at:
 
-### How the two voice effect works
+* `const_scenario_preset_a_stream_1` at `0x7E15`
+* `const_scenario_preset_a_stream_2` at `0x7E56`
 
-The Spectrum beeper is one bit, so true polyphony is impossible. Alien Evolution approximates it by rapidly alternating between two tone generators.
+The interpreter state block is `0xFBE4..0xFBEF`:
 
-Inside the inner loop at `0xFC51`:
+* `0xFBE4` current command byte from stream A
+* `0xFBE5` current command byte from stream B
+* `0xFBE6` latched output seed used by the audio routines
+* `0xFBE7..0xFBEE` stream pointers
+* `0xFBEF` timing / control byte
 
-* the current toggle mask is kept in `A` and mirrored in the alternate accumulator via `EX AF,AF'`
-* two counters (in `E` and `L`) are decremented at different rates
-* when a counter reaches zero, the output mask is flipped (`XOR`) and the counter is reloaded
-* the routine writes the mask to port `0xFE` (via `OUT (0xFE),A`) to flip the beeper state
+One detail matters a lot when reading preset data: `fn_stream_byte_fetch_helper` at `0xFBF0` increments the stored pointer before reading the byte.
+So the first raw byte in each preset is a seed / skipped byte, not the first audible command.
 
-The effect is a time division multiplexed mixture: not simultaneous tones, but tones switched quickly enough that the ear perceives two lines.
+For preset A this means:
 
-This is one of those areas where the exact details are easier to see in the code than in prose, so the recommended reading path is: start at `0xFBCC`, follow into `0xFC13`, then study the loop around `0xFC51`.
+* raw bytes start with `0x16` in both streams
+* the first effective command pair is `0xB4 / 0x29`, not `0x16 / 0x16`
+
+### Ordinary music path
+
+The core interpreter is `core_command_interpreter_scenario_stream_engine` at `0xFC13`.
+For ordinary command pairs it enters the two-divider loop at `0xFC40..0xFC81`.
+
+This loop implements the familiar "fake two-voice Spectrum beeper" trick:
+
+* one divider lives in `E`
+* one divider lives in `L`
+* both toggle the same beeper latch bit via `XOR 0x10`
+* the current latch value is written with `OUT (0xFE),A`
+
+So the game does not have true polyphony. It time-division multiplexes two divider-controlled toggles fast enough that the ear hears two lines.
+
+In preset A, the harmonic tail at the end of the splash comes from this ordinary music path.
+The effective low tones are:
+
+* `0xF7 / 0x29` -> about `87.0 Hz`
+* `0xFA / 0x29` -> about `102.8 Hz`
+* `0xFC / 0x29` -> about `114.7 Hz`
+
+These are interleaved with noise words; the splash does not switch to a separate music engine.
+The second divider in these tail words remains present as a very fast carrier component, so a faithful reconstruction should keep the full two-divider behavior even though the low tone is what stands out perceptually.
+
+### Special command path and splash microcells
+
+The more interesting splash sounds come from the special-command path at `0xFCD6..0xFCF8`.
+
+For a command byte `A_cmd`, the dispatcher:
+
+* takes `D_bits` from `0xFBE5`, the paired byte from stream B
+* normalizes timing parameters from `0xFBEF`
+* rotates `A_cmd`
+* executes exactly four subcalls
+* for each subcall, either:
+  * calls `bitstream_pulse_generator()` at `0xFD0E`, or
+  * calls `pre_delay_calibration_helper()` at `0xFC87`
+
+Those four subcalls are the natural "microcells" of the splash-noise system.
+
+With the preset-A timing byte `0xEE`, the normalized values are:
+
+* `A_inv = (~0xEE) & 0xFF = 0x11`
+* `C_delay = 0x11`
+* `E_wait = 0x04`
+
+That gives the following exact microcell durations:
+
+| Symbol | Source path | `D_bits` | Duration | `OUT (0xFE)` count | Practical meaning |
+| --- | --- | --- | --- | ---: | --- |
+| `_` | `pre_delay_calibration_helper(C_wait=4)` | none | `27.236 ms` | 0 | timed silence |
+| `1` | `bitstream_pulse_generator(C_repeat=4, D=0x29)` | `0x29` | `27.035 ms` | 384 | sparse ROM-LSB replay, heard as the type-1 chirp |
+| `2` | `bitstream_pulse_generator(C_repeat=4, D=0x01)` | `0x01` | `26.594 ms` | 128 | very sparse replay, heard as the type-2 mid buzz |
+| `3` | `bitstream_pulse_generator(C_repeat=4, D=0xFF)` | `0xFF` | `28.120 ms` | 1024 | dense replay, heard as the type-3 hash |
+
+These microcells are source-level facts. They come directly from the Z80 routines, not from listening to a WAV capture.
+
+### What `bitstream_pulse_generator` actually does
+
+The key routine is `bitstream_pulse_generator` at `0xFD0E`.
+Its behavior is exact and important:
+
+* `A_port` starts from `0xFBE6`
+* `B` starts at `0x00`
+* `HL` starts at `0x03E8`
+* every inner iteration performs `RRC D`
+* if carry is clear, no audio output happens; the routine only burns time
+* if carry is set:
+  * `HL` is incremented
+  * `BIT 0,(HL)` reads the least significant bit of the ROM byte at that address
+  * bit 4 of `A_port` is set or reset from that ROM bit
+  * `OUT (0xFE),A` writes the value to the beeper / border port
+
+So `1`, `2`, and `3` are not three unrelated noise colors.
+They are the same ROM-derived bit phrase replayed at different densities.
+
+All active microcells restart from the same ROM tap address `0x03E8`.
+The beginning of the ROM-LSB phrase is therefore the same every time:
+
+```text
+ROM[0x03E9] bit0, ROM[0x03EA] bit0, ROM[0x03EB] bit0, ...
+0, 1, 0, 1, 1, 1, 1, 1, 1, 1, 0, 1, ...
+```
+
+The difference between `1`, `2`, and `3` is only how often the routine reaches the `carry set` branch:
+
+* `1` (`D=0x29`) uses the repeating carry mask `1 0 0 1 0 1 0 0`
+* `2` (`D=0x01`) uses the repeating carry mask `1 0 0 0 0 0 0 0`
+* `3` (`D=0xFF`) uses the repeating carry mask `1 1 1 1 1 1 1 1`
+
+This changes the density of `OUT (0xFE)` events:
+
+* `1` replays the ROM-LSB phrase at about `14.2 kHz`
+* `2` replays it at about `4.8 kHz`
+* `3` replays it at about `36.4 kHz`
+
+That is the source-level explanation for the three splash noise timbres.
+
+There is no explicit envelope or pitch sweep variable in these routines.
+The quasi-tonal or falling impression of the audible type-1 chunk comes from replaying the same short, finite ROM-LSB phrase from the same start address every time `HL` is reset to `0x03E8`.
+
+### Four-cell command words
+
+For preset A, the special command bytes collapse to four fixed four-cell words:
+
+| Command pair | Four-cell word | Audible role |
+| --- | --- | --- |
+| `0xB4 / 0x29` | `_1__` | one type-1 burst inside a 4-cell frame |
+| `0xEC / 0x01` | `22__` | one type-2 burst inside a 4-cell frame |
+| `0xF3 / 0xFF` | `__33` | late type-3 burst |
+| `0xEE / 0xFF` | `333_` | early type-3 burst |
+
+Two important consequences follow directly from the source:
+
+* type 1 is never `11` or longer in preset A; it is always a single `1` inside `_1__`
+* type 2 is always `22`; it never appears as a single `2`
+* only type 3 can form longer active runs across command boundaries
+
+The last point is crucial for understanding the splash recording.
+Adjacent words can merge like this:
+
+```text
+__33 333_  ->  __33333_
+```
+
+So the source can produce type-3 runs of:
+
+* `33`
+* `333`
+* `33333`
+
+That exactly explains why the dense noise region sounds like one family with variable lengths, while type 1 and type 2 behave like much more stable motifs.
+
+### From microcells to real audible macrocells
+
+To talk about the recording, it is useful to introduce a second layer of terminology.
+These "macrocells" are not a second hidden source format. They are perceptual phrases heard in the captured splash audio.
+
+The repository keeps representative captured examples in:
+
+* `resources/1.wav` for the type-1 macrocell
+* `resources/2.wav` for the type-2 macrocell
+* `resources/3.wav` for the type-3 macrocell
+
+The safest mapping is:
+
+* type-1 macrocell: one `_1__` command word, perceived as a chirp-like phrase
+* type-2 macrocell: one `22__` command word, perceived as a short mid-band buzz
+* type-3 macrocell: one `__33` or `333_` word, or a merger of neighboring type-3 words, perceived as dense hash
+* harmonic macrocell: one ordinary music word (`87.0 Hz`, `102.8 Hz`, `114.7 Hz`)
+
+This is where source and audio finally line up:
+
+* the stream engine concatenates microcells literally
+* the beeper, speaker, capture chain, and listening window make each 4-cell word sound like one audible phrase
+* type-3 phrases vary in length because type-3 active runs can cross word boundaries
+* type-1 and type-2 phrases stay much more stable because their active microcells do not merge the same way
+
+There is no hidden source-side transformation from `_1__22__` into `11112___`.
+The command stream is still `_1__22__`.
+What changes is only how that literal 1-bit sequence is perceived and measured after hardware and acoustic filtering.
+
+### Preset-A splash scenario in byte pairs
+
+The effective preset-A command sequence is:
+
+```text
+B4/29 EC/01 B4/29 B4/29 EC/01 B4/29 B4/29 B4/29
+EC/01 EC/01 F3/FF B4/29 B4/29 B4/29 B4/29 EC/01
+EC/01 EC/01 F3/FF F3/FF EE/FF B4/29 EE/FF EE/FF
+F3/FF EC/01 F3/FF EC/01 F3/FF EE/FF EE/FF B4/29
+EC/01 F3/FF EC/01 F3/FF EE/FF EE/FF F3/FF B4/29
+EC/01 F3/FF B4/29 EC/01 F3/FF B4/29 EC/01 F3/FF
+EE/FF EE/FF F3/FF EC/01 F3/FF F7/29 F3/FF F7/29
+F3/FF FA/29 F3/FF FA/29 EE/FF FC/29 EE/FF
+```
+
+The final five harmonic entries are ordinary music words:
+
+* `F7/29`
+* `F7/29`
+* `FA/29`
+* `FA/29`
+* `FC/29`
+
+### Preset-A splash scenario in microcells
+
+Expanding every special word gives:
+
+```text
+_1__ 22__ _1__ _1__ 22__ _1__ _1__ _1__
+22__ 22__ __33 _1__ _1__ _1__ _1__ 22__
+22__ 22__ __33 __33 333_ _1__ 333_ 333_
+__33 22__ __33 22__ __33 333_ 333_ _1__
+22__ __33 22__ __33 333_ 333_ __33 _1__
+22__ __33 _1__ 22__ __33 _1__ 22__ __33
+333_ 333_ __33 22__ __33 87Hz __33 87Hz
+__33 102.8Hz __33 102.8Hz 333_ 114.7Hz 333_
+```
+
+This form is the most useful one if you want to synthesize the splash from game data without guessing.
+
+### Preset-A splash scenario in macrocells
+
+If you prefer the perceptual names instead of source symbols, the same scenario can be read as:
+
+```text
+T1 T2 T1 T1 T2 T1 T1 T1
+T2 T2 T3late T1 T1 T1 T1 T2
+T2 T2 T3late T3late T3early T1 T3early T3early
+T3late T2 T3late T2 T3late T3early T3early T1
+T2 T3late T2 T3late T3early T3early T3late T1
+T2 T3late T1 T2 T3late T1 T2 T3late
+T3early T3early T3late T2 T3late 87Hz T3late 87Hz
+T3late 102.8Hz T3late 102.8Hz T3early 114.7Hz T3early
+```
+
+Here:
+
+* `T1` means the `_1__` word
+* `T2` means the `22__` word
+* `T3late` means the `__33` word
+* `T3early` means the `333_` word
+
+The distinction between `T3late` and `T3early` matters, because it controls whether the dense hash begins in the last two cells of the frame or the first three.
+When neighboring type-3 words touch, this phase difference determines whether the audible run is `33`, `333`, or `33333`.
+
+### How to reconstruct the real splash sounds from game data
+
+If the goal is to rebuild the original splash sounds from the game data, the reliable procedure is:
+
+1. Start from the preset stream pointers (`0x7E15` and `0x7E56` for preset A).
+2. Apply the fetch-helper convention: increment each pointer before reading, so the first effective word is `0xB4 / 0x29`.
+3. For each word:
+   * if it is an ordinary music word, run the divider-based `0xFC40..0xFC81` path
+   * if it is a special word, expand it into four microcells via `special_command_dispatcher`
+4. For each `_` microcell, emit silence for `27.236 ms`.
+5. For each active microcell `1`, `2`, or `3`, run the exact `0xFD0E` bitstream routine:
+   * `HL = 0x03E8`
+   * `B = 0x00`
+   * `C = 0x04`
+   * `D = 0x29`, `0x01`, or `0xFF`
+   * replay the ROM LSB stream through bit 4 of `OUT (0xFE),A`
+6. Concatenate the resulting 1-bit waveform exactly in source order.
+7. Only after that, if desired, apply speaker / acoustic smoothing or backend-specific rendering.
+
+The important part is step 5.
+If you skip the actual `0xFD0E` logic and replace it with a generic noise source, you lose the mechanism that makes the splash sound recognizable.
+
+For splash audio, the original game is not playing abstract "noise notes".
+It is replaying a specific ROM-LSB phrase at different densities, framed into four-cell words, and then concatenating those words into the scenario script above.
 
 ## Dynamic entities: queues, callbacks, and map centric state
 
