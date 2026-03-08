@@ -501,12 +501,8 @@ def run_pyxel_game(
         redraw_required = True
         pending_delay_frames = max(0, int(last_output.timing.delay_after_step_frames))
         audio_player.submit(last_output.audio_events, now_s=now_s)
-        remaining_host_frames -= 1
-
-        if remaining_host_frames > 0 and pending_delay_frames > 0:
-            consumed_delay_frames = min(remaining_host_frames, pending_delay_frames)
-            for idx in range(consumed_delay_frames):
-                _advance_delay_host_frame(skip_heavy_ops=(idx + 1) < consumed_delay_frames)
+        # Keep the freshly emitted frame alive until at least the next draw.
+        # Remaining catch-up is handled by the next callbacks via pending_delay_frames.
 
         audio_player.update(now_s=now_s)
         _refresh_audio_debug_overlay()

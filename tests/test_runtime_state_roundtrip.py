@@ -447,6 +447,137 @@ class RuntimeStateRoundtripTests(unittest.TestCase):
         self.assertIsNone(delay)
         self.assertEqual(active_map[q0_index] & 0x3F, 0x11)
 
+    def test_scheduler_autonomous_deferred_path_matches_legacy_outer_frame_sequence(self) -> None:
+        def _prepare_runtime() -> tuple[AlienEvolutionPort, tuple[int, ...]]:
+            runtime = AlienEvolutionPort()
+            active_map = runtime.var_level_map_mode_0
+            q0_index = 0x0064
+            q1_index = 0x0096
+            q2_index = 0x00C8
+            seed_index = 0x01F4
+            current_index = 0x0300
+            tracked = (
+                q0_index,
+                q1_index,
+                q2_index,
+                seed_index,
+                seed_index + 0x0001,
+                seed_index - 0x0001,
+                seed_index - 0x0032,
+                seed_index + 0x0032,
+            )
+            for index in tracked + (current_index,):
+                active_map[index] = 0x00
+            active_map[q0_index] = 0x19
+            active_map[q1_index] = 0x11
+            active_map[q2_index] = 0x0D
+            active_map[seed_index] = 0x01
+            active_map[current_index] = 0x21
+
+            for queue in (
+                runtime.var_runtime_object_queue_0,
+                runtime.var_runtime_object_queue_1,
+                runtime.var_runtime_object_queue_2,
+                runtime.var_runtime_object_queue_3,
+                runtime.var_runtime_object_queue_4,
+            ):
+                for entry in queue.entries:
+                    entry.state = 0x00
+                    entry.cell_ptr = None
+                queue.entries[0].state = 0xFF
+
+            runtime.var_runtime_object_queue_0.entries[0].state = 0x01
+            runtime.var_runtime_object_queue_0.entries[0].cell_ptr = BlockPtr(active_map, q0_index)
+            runtime.var_runtime_object_queue_0.entries[1].state = 0xFF
+            runtime.var_runtime_object_queue_1.entries[0].state = 0x01
+            runtime.var_runtime_object_queue_1.entries[0].cell_ptr = BlockPtr(active_map, q1_index)
+            runtime.var_runtime_object_queue_1.entries[1].state = 0xFF
+            runtime.var_runtime_object_queue_2.entries[0].state = 0x01
+            runtime.var_runtime_object_queue_2.entries[0].cell_ptr = BlockPtr(active_map, q2_index)
+            runtime.var_runtime_object_queue_2.entries[1].state = 0xFF
+            runtime.var_runtime_object_queue_3.entries[0].state = 0x01
+            runtime.var_runtime_object_queue_3.entries[0].cell_ptr = BlockPtr(active_map, seed_index)
+            runtime.var_runtime_object_queue_3.entries[1].state = 0xFF
+            runtime.var_runtime_object_queue_4.entries[0].state = 0xFF
+
+            runtime.var_runtime_queue_head_0 = runtime.var_runtime_object_queue_0
+            runtime.var_runtime_queue_head_1 = runtime.var_runtime_object_queue_1
+            runtime.var_runtime_queue_head_2 = runtime.var_runtime_object_queue_2
+            runtime.var_runtime_queue_head_3 = runtime.var_runtime_object_queue_3
+            runtime.var_runtime_queue_head_4 = runtime.var_runtime_object_queue_4
+            runtime.var_runtime_current_cell_ptr = BlockPtr(active_map, current_index)
+            runtime.var_runtime_progress_byte_0 = 0x01
+            runtime.var_runtime_progress_byte_1 = 0x00
+            runtime.var_runtime_progress_byte_2 = 0x00
+            runtime.var_runtime_objective_counter = 0x06
+            runtime.var_runtime_scheduler_timer = 0x0101
+            runtime.patch_scheduler_script_base_ptr = 0
+            runtime.const_periodic_scheduler_script[0] = 0x01
+
+            runtime.per_frame_object_state_update_pass = lambda: None  # type: ignore[assignment]
+            runtime.fn_gameplay_movement_control_step = lambda: None  # type: ignore[assignment]
+            runtime.fn_process_transient_effect_queues_handlers_xe530 = lambda: None  # type: ignore[assignment]
+            runtime.fn_patchable_callback_hook_frame_loop = (  # type: ignore[assignment]
+                lambda *args, **kwargs: (0, 0) if kwargs else None
+            )
+            runtime.fn_directional_interaction_dispatcher_using_pointer_table = (  # type: ignore[assignment]
+                lambda *args, **kwargs: None
+            )
+            runtime.fn_active_transient_effect_executor = lambda: None  # type: ignore[assignment]
+            runtime.fn_main_pseudo_3d_map_render_pipeline = lambda: None  # type: ignore[assignment]
+            runtime.fn_hud_triplet_increment_helper_bytes_xa8d8 = lambda: None  # type: ignore[assignment]
+            runtime.fn_hud_triplet_decrement_helper_bytes_xa8d8 = lambda: None  # type: ignore[assignment]
+            runtime.fn_counter_rebalance_helper = lambda *args, **kwargs: None  # type: ignore[assignment]
+            runtime.fn_rebuild_hud_meter_bars_counters_xa8c4 = lambda: None  # type: ignore[assignment]
+            runtime._rom_beeper = lambda *args, **kwargs: 0  # type: ignore[assignment]
+            return runtime, tracked
+
+        def _snapshot(runtime: AlienEvolutionPort, tracked: tuple[int, ...]) -> tuple[int, ...]:
+            active_map = runtime.var_level_map_mode_0
+            return tuple(active_map[index] & 0x3F for index in tracked)
+
+        def _collapse(sequence: list[tuple[int, ...]]) -> list[tuple[int, ...]]:
+            collapsed: list[tuple[int, ...]] = []
+            for item in sequence:
+                if not collapsed or collapsed[-1] != item:
+                    collapsed.append(item)
+            return collapsed
+
+        legacy_runtime, tracked = _prepare_runtime()
+        legacy_frames: list[tuple[int, ...]] = []
+        legacy_advance = legacy_runtime.advance_host_frame
+
+        def _legacy_advance_hook() -> None:
+            legacy_advance()
+            legacy_frames.append(_snapshot(legacy_runtime, tracked))
+
+        legacy_runtime.advance_host_frame = _legacy_advance_hook  # type: ignore[assignment]
+        legacy_runtime.per_frame_object_state_update_pass()
+        legacy_runtime.fn_process_transient_effect_queues_handlers_xe530()
+        legacy_runtime.fn_gameplay_movement_control_step()
+        legacy_runtime.fn_directional_interaction_dispatcher_using_pointer_table()
+        legacy_runtime.fn_patchable_callback_hook_frame_loop()
+        legacy_runtime.fn_periodic_scheduler_tick()
+        legacy_runtime.fn_main_pseudo_3d_map_render_pipeline()
+        legacy_runtime._yield_gameplay_frame()
+
+        fsm_runtime, tracked = _prepare_runtime()
+        fsm_runtime._fsm_state = FSM_STATE_GAMEPLAY_MAIN_FRAME
+        fsm_runtime._fsm_gameplay_ctx["initialized"] = True
+        fsm_runtime._fsm_tick_ctx = {
+            "pending_autonomous": False,
+            "pending_marker": False,
+        }
+        fsm_frames: list[tuple[int, ...]] = []
+        for _ in range(20):
+            output = fsm_runtime.step(_NEUTRAL_INPUT)
+            if int(output.timing.delay_after_step_frames) > 0:
+                fsm_frames.append(_snapshot(fsm_runtime, tracked))
+            if fsm_runtime._fsm_state == FSM_STATE_GAMEPLAY_BRANCH:
+                break
+
+        self.assertEqual(_collapse(legacy_frames), _collapse(fsm_frames))
+
     def test_scheduler_autonomous_state_fails_fast_without_phase(self) -> None:
         runtime = AlienEvolutionPort()
         runtime._fsm_state = FSM_STATE_SCHEDULER_AUTONOMOUS_FRAME

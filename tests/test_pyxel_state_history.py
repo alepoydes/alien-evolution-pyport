@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import sys
 import unittest
+from unittest.mock import patch
 
 from alien_evolution.pyxel.sound import AudioDebugStats
 from alien_evolution.pyxel.runner import (
@@ -11,7 +13,9 @@ from alien_evolution.pyxel.runner import (
     ScreenMessageQueue,
     _format_audio_debug_overlay_lines,
     _maybe_apply_runtime_cheat,
+    run_pyxel_game,
 )
+from alien_evolution.zx.runtime import FrameInput, StepOutput, StepTiming
 
 
 class _DummyStatefulRuntime:
@@ -38,6 +42,84 @@ class _DummyCheatRuntime:
         typed = tuple(str(symbol) for symbol in symbols)
         self.calls.append(typed)
         return "".join(typed) == "lvl1"
+
+
+class _DummyFrameRuntime:
+    def __init__(self) -> None:
+        self.step_calls = 0
+        self.advance_host_frame_calls = 0
+        self._last_output = StepOutput(
+            screen_bitmap=b"idle",
+            screen_attrs=b"attrs",
+            flash_phase=0,
+            audio_events=(),
+            border_color=0,
+            timing=StepTiming(delay_after_step_frames=0),
+        )
+
+    def reset(self) -> None:
+        self.step_calls = 0
+        self.advance_host_frame_calls = 0
+        self._last_output = StepOutput(
+            screen_bitmap=b"idle",
+            screen_attrs=b"attrs",
+            flash_phase=0,
+            audio_events=(),
+            border_color=0,
+            timing=StepTiming(delay_after_step_frames=0),
+        )
+
+    def step(self, frame_input: FrameInput) -> StepOutput:
+        self.step_calls += 1
+        self._last_output = StepOutput(
+            screen_bitmap=f"frame-{self.step_calls}".encode("ascii"),
+            screen_attrs=b"attrs",
+            flash_phase=0,
+            audio_events=(),
+            border_color=0,
+            timing=StepTiming(delay_after_step_frames=2),
+        )
+        return self._last_output
+
+    def advance_host_frame(self) -> None:
+        self.advance_host_frame_calls += 1
+
+    def snapshot_output(self) -> StepOutput:
+        return self._last_output
+
+
+class _FakePyxelRunner:
+    def __init__(self, runtime: _DummyFrameRuntime) -> None:
+        self.runtime = runtime
+        self.advance_calls_after_draw: list[int] = []
+        self.step_calls_after_draw: list[int] = []
+
+    def init(self, *args, **kwargs) -> None:  # type: ignore[no-untyped-def]
+        return
+
+    def run(self, update, draw) -> None:  # type: ignore[no-untyped-def]
+        update()
+        draw()
+        self.advance_calls_after_draw.append(self.runtime.advance_host_frame_calls)
+        self.step_calls_after_draw.append(self.runtime.step_calls)
+        update()
+        draw()
+        self.advance_calls_after_draw.append(self.runtime.advance_host_frame_calls)
+        self.step_calls_after_draw.append(self.runtime.step_calls)
+
+    def text(self, *args, **kwargs) -> None:  # type: ignore[no-untyped-def]
+        return
+
+
+class _FakeAudioPlayer:
+    def clock_snapshot(self, *, now_s: float):  # type: ignore[no-untyped-def]
+        return None
+
+    def submit(self, events, *, now_s: float) -> None:  # type: ignore[no-untyped-def]
+        return
+
+    def update(self, *, now_s: float) -> None:  # type: ignore[no-untyped-def]
+        return
 
 
 class PyxelStateHistoryTests(unittest.TestCase):
@@ -114,6 +196,37 @@ class ScreenMessageQueueTests(unittest.TestCase):
 
         self.assertEqual(lines[0], "AUD ep=4 tick=99 loss=23t")
         self.assertEqual(lines[1], "late=5t/2e miss=7t/3e sat=11t/1e")
+
+    def test_runner_keeps_fresh_step_frame_visible_until_next_draw(self) -> None:
+        runtime = _DummyFrameRuntime()
+        fake_pyxel = _FakePyxelRunner(runtime)
+        blit_bitmaps: list[bytes] = []
+
+        with (
+            patch.dict(sys.modules, {"pyxel": fake_pyxel}),
+            patch("alien_evolution.pyxel.runner.PyxelAudioPlayer", return_value=_FakeAudioPlayer()),
+            patch(
+                "alien_evolution.pyxel.runner.read_frame_input",
+                return_value=FrameInput(joy_kempston=0, keyboard_rows=(0xFF,) * 8),
+            ),
+            patch("alien_evolution.pyxel.runner.apply_zx_palette", return_value=None),
+            patch(
+                "alien_evolution.pyxel.runner.blit_zx_screen_to_pyxel",
+                side_effect=lambda bitmap, attrs, **kwargs: blit_bitmaps.append(bytes(bitmap)),
+            ),
+            patch("alien_evolution.pyxel.runner.time.perf_counter", side_effect=[0.0, 0.04, 0.06]),
+        ):
+            run_pyxel_game(
+                runtime,
+                title="test",
+                fps=50,
+                dev_tools=False,
+                history_interval_host_frames=0,
+            )
+
+        self.assertEqual(fake_pyxel.advance_calls_after_draw, [0, 1])
+        self.assertEqual(fake_pyxel.step_calls_after_draw, [1, 1])
+        self.assertEqual(blit_bitmaps, [b"frame-1"])
 
 
 class CheatCommandBufferTests(unittest.TestCase):
