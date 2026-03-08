@@ -55,6 +55,7 @@ _DEFAULT_CUBE_FAST_MASK_PAIRS: tuple[tuple[int, int], ...] = (
 GAMEPLAY_FRAME_DIVIDER: int = 6
 _AUDIO_TICKS_PER_SECOND: int = 120
 _HOST_FRAMES_PER_SECOND: int = 50
+STREAM_EOF_DRAIN_MARGIN_TICKS: int = 3
 
 # Stream interpreter throughput budget per host frame. This keeps menu/intro
 # stream progression close to original pacing without tying gameplay loop speed
@@ -947,6 +948,12 @@ class AlienEvolutionPort(StatefulManifestRuntime, AlienEvolutionData, ZXSpectrum
             cut_tick = self._audio_safe_start_tick_for_epoch()
         return self.schedule_reset(cut_tick)
 
+    def _stream_drain_ready(self, tail_tick: int) -> bool:
+        target_tail_tick = max(0, int(tail_tick))
+        return self._audio_safe_start_tick_for_epoch() >= (
+            target_tail_tick + STREAM_EOF_DRAIN_MARGIN_TICKS
+        )
+
     def _fsm_start_stream(
         self,
         *,
@@ -965,11 +972,12 @@ class AlienEvolutionPort(StatefulManifestRuntime, AlienEvolutionData, ZXSpectrum
         self._reset_stream_audio_timing_state()
         self._fsm_stream_ctx = {
             "abort_on_keypress": bool(abort_on_keypress),
+            "drain_tail_tick": None,
             "return_state": return_state,
         }
         self._interrupts_enabled = False
 
-    def _fsm_finish_stream(self) -> str:
+    def _fsm_finish_stream(self, *, cut_tick: int | None = None) -> str:
         ctx = self._fsm_stream_ctx
         if not ctx:
             raise RuntimeError("FSM stream finish requires non-empty _fsm_stream_ctx")
@@ -977,12 +985,22 @@ class AlienEvolutionPort(StatefulManifestRuntime, AlienEvolutionData, ZXSpectrum
             raise RuntimeError("FSM stream finish requires return_state in context")
         if not isinstance(ctx["return_state"], str):
             raise RuntimeError("FSM stream finish requires string return_state")
-        self.schedule_reset(self._audio_safe_start_tick_for_epoch())
+        final_cut_tick = self._audio_safe_start_tick_for_epoch() if cut_tick is None else max(0, int(cut_tick))
+        self.schedule_reset(final_cut_tick)
         return_state = ctx["return_state"]
         self._reset_stream_audio_timing_state()
         self._interrupts_enabled = True
         self._fsm_stream_ctx = {}
         return return_state
+
+    def _fsm_finish_stream_on_keypress(self) -> tuple[str, int | None]:
+        next_state = self._fsm_finish_stream()
+        # Gameplay splash-dismiss key must be consumed by splash itself; do
+        # not let held key continue into gameplay movement in the same tick.
+        if next_state == FSM_STATE_GAMEPLAY_MAIN_FRAME:
+            self._fsm_menu_ctx["wait_release_return_state"] = next_state
+            return FSM_STATE_WAIT_KEYBOARD_RELEASE_FRAME, 1
+        return next_state, None
 
     def _fsm_state_menu_init(self) -> tuple[str, int | None]:
         # ZX 0x6C82..0x6CD7 + 0xF152..0xF173 (FSM state MENU_INIT)
@@ -1007,21 +1025,25 @@ class AlienEvolutionPort(StatefulManifestRuntime, AlienEvolutionData, ZXSpectrum
             raise RuntimeError("FSM stream state requires abort_on_keypress in context")
         if not isinstance(ctx["abort_on_keypress"], bool):
             raise RuntimeError("FSM stream state requires bool abort_on_keypress")
+        drain_tail_tick = ctx.get("drain_tail_tick")
+        if drain_tail_tick is not None and not isinstance(drain_tail_tick, int):
+            raise RuntimeError("FSM stream state requires integer drain_tail_tick")
 
-        try:
-            self._fill_stream_audio_until_target()
-        except ForcedInterpreterAbort:
-            return self._fsm_finish_stream(), None
+        if drain_tail_tick is None:
+            try:
+                self._fill_stream_audio_until_target()
+            except ForcedInterpreterAbort:
+                drain_tail_tick = self.audio_epoch_tail()
+                if drain_tail_tick <= 0:
+                    return self._fsm_finish_stream(), None
+                ctx["drain_tail_tick"] = drain_tail_tick
 
         key_code = self._rom_keyboard_input_poll_028e()
         if bool(ctx["abort_on_keypress"]) and ((key_code + 0x01) & 0xFF) != 0x00:
-            next_state = self._fsm_finish_stream()
-            # Gameplay splash-dismiss key must be consumed by splash itself; do
-            # not let held key continue into gameplay movement in the same tick.
-            if next_state == FSM_STATE_GAMEPLAY_MAIN_FRAME:
-                self._fsm_menu_ctx["wait_release_return_state"] = next_state
-                return FSM_STATE_WAIT_KEYBOARD_RELEASE_FRAME, 1
-            return next_state, None
+            return self._fsm_finish_stream_on_keypress()
+
+        if drain_tail_tick is not None and self._stream_drain_ready(drain_tail_tick):
+            return self._fsm_finish_stream(cut_tick=drain_tail_tick), None
 
         return FSM_STATE_STREAM_INTERMISSION_FRAME, 1
 
@@ -5953,17 +5975,24 @@ class AlienEvolutionPort(StatefulManifestRuntime, AlienEvolutionData, ZXSpectrum
         self._reset_stream_audio_timing_state()
 
         self._interrupts_enabled = False
+        drain_tail_tick: int | None = None
         try:
             while True:
-                try:
-                    self._fill_stream_audio_until_target()
-                except ForcedInterpreterAbort:
-                    self.schedule_reset(self._audio_safe_start_tick_for_epoch())
-                    return
+                if drain_tail_tick is None:
+                    try:
+                        self._fill_stream_audio_until_target()
+                    except ForcedInterpreterAbort:
+                        drain_tail_tick = self.audio_epoch_tail()
+                        if drain_tail_tick <= 0:
+                            self.schedule_reset(self._audio_safe_start_tick_for_epoch())
+                            return
 
                 key_code = self._rom_keyboard_input_poll_028e()
                 if abort_on_keypress and ((key_code + 0x01) & 0xFF) != 0x00:
                     self.schedule_reset(self._audio_safe_start_tick_for_epoch())
+                    return
+                if drain_tail_tick is not None and self._stream_drain_ready(drain_tail_tick):
+                    self.schedule_reset(drain_tail_tick)
                     return
 
                 self._yield_frame()

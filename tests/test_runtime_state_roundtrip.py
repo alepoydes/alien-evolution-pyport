@@ -26,9 +26,10 @@ from alien_evolution.alienevolution.logic import (
     FSM_STATE_STREAM_INTERMISSION_FRAME,
     FSM_STATE_TRANSITION_DISPATCH,
     AlienEvolutionPort,
+    ForcedInterpreterAbort,
 )
 from alien_evolution.zx.pointers import BlockPtr, StructFieldPtr
-from alien_evolution.zx.runtime import FrameInput
+from alien_evolution.zx.runtime import AudioClockSnapshot, AudioResetEvent, FrameInput
 from alien_evolution.zx.state import StatefulManifestRuntime
 
 
@@ -1188,6 +1189,57 @@ class RuntimeStateRoundtripTests(unittest.TestCase):
         self.assertEqual(runtime._fsm_stream_ctx, {})
         self.assertTrue(runtime._interrupts_enabled)
 
+    def test_stream_finish_on_natural_abort_waits_for_drain_and_resets_at_tail_tick(self) -> None:
+        runtime = AlienEvolutionPort()
+        runtime.begin_frame(
+            FrameInput(
+                audio_clock=AudioClockSnapshot(current_epoch_id=0, safe_start_tick=10, fill_until_tick=20),
+            )
+        )
+        runtime._fsm_stream_ctx = {
+            "abort_on_keypress": True,
+            "return_state": FSM_STATE_MENU_INIT,
+        }
+        runtime._interrupts_enabled = False
+        runtime.emit_note_event(
+            waveform="S",
+            freq_hz=440.0,
+            start_tick=12,
+            duration_ticks=15,
+            volume=5,
+            source="stream_music",
+        )
+
+        def _raise_forced_abort() -> None:
+            raise ForcedInterpreterAbort()
+
+        runtime._fill_stream_audio_until_target = _raise_forced_abort  # type: ignore[assignment]
+        runtime._rom_keyboard_input_poll_028e = lambda: 0xFF  # type: ignore[assignment]
+
+        next_state, delay = runtime._fsm_state_stream_intermission_frame()
+
+        self.assertEqual(next_state, FSM_STATE_STREAM_INTERMISSION_FRAME)
+        self.assertEqual(delay, 1)
+        self.assertEqual(runtime._fsm_stream_ctx.get("drain_tail_tick"), 27)
+        self.assertFalse(runtime._interrupts_enabled)
+
+        runtime._audio_clock = AudioClockSnapshot(current_epoch_id=0, safe_start_tick=30, fill_until_tick=30)
+
+        def _unexpected_fill() -> None:
+            raise AssertionError("Drain path must not refill stream audio")
+
+        runtime._fill_stream_audio_until_target = _unexpected_fill  # type: ignore[assignment]
+
+        next_state, delay = runtime._fsm_state_stream_intermission_frame()
+        reset_events = [event for event in runtime._audio_events if isinstance(event, AudioResetEvent)]
+
+        self.assertEqual(next_state, FSM_STATE_MENU_INIT)
+        self.assertIsNone(delay)
+        self.assertEqual(runtime._fsm_stream_ctx, {})
+        self.assertTrue(runtime._interrupts_enabled)
+        self.assertTrue(reset_events)
+        self.assertEqual(reset_events[-1].cut_tick, 27)
+
     def test_stream_finish_fails_fast_on_non_string_return_state(self) -> None:
         runtime = AlienEvolutionPort()
         runtime._fsm_stream_ctx = {
@@ -1482,6 +1534,43 @@ class RuntimeStateRoundtripTests(unittest.TestCase):
         runtime._fsm_step_active = True
         with self.assertRaisesRegex(RuntimeError, "Legacy stream intermission loop called"):
             runtime.scenario_intermission_beeper_stream_player_loop()
+
+    def test_legacy_stream_intermission_loop_drains_queued_audio_before_reset(self) -> None:
+        runtime = AlienEvolutionPort()
+        runtime.begin_frame(
+            FrameInput(
+                audio_clock=AudioClockSnapshot(current_epoch_id=0, safe_start_tick=10, fill_until_tick=20),
+            )
+        )
+        runtime.emit_note_event(
+            waveform="S",
+            freq_hz=440.0,
+            start_tick=12,
+            duration_ticks=15,
+            volume=5,
+            source="stream_music",
+        )
+        fill_calls = {"count": 0}
+
+        def _fill_with_single_abort() -> None:
+            fill_calls["count"] += 1
+            if fill_calls["count"] == 1:
+                raise ForcedInterpreterAbort()
+            raise AssertionError("Legacy drain path must not refill stream audio")
+
+        safe_ticks = iter((10, 30))
+        runtime._fill_stream_audio_until_target = _fill_with_single_abort  # type: ignore[assignment]
+        runtime._audio_safe_start_tick_for_epoch = lambda epoch_id=None: next(safe_ticks)  # type: ignore[assignment]
+        runtime._rom_keyboard_input_poll_028e = lambda: 0xFF  # type: ignore[assignment]
+        runtime._yield_frame = lambda: None  # type: ignore[assignment]
+
+        runtime.scenario_intermission_beeper_stream_player_loop()
+        reset_events = [event for event in runtime._audio_events if isinstance(event, AudioResetEvent)]
+
+        self.assertEqual(fill_calls["count"], 1)
+        self.assertTrue(reset_events)
+        self.assertEqual(reset_events[-1].cut_tick, 27)
+        self.assertTrue(runtime._interrupts_enabled)
 
     def test_callback_states_fail_fast_without_required_counters(self) -> None:
         runtime = AlienEvolutionPort()
