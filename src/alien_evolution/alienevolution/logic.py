@@ -49,7 +49,10 @@ _DEFAULT_CUBE_FAST_MASK_PAIRS: tuple[tuple[int, int], ...] = (
 
 # Keep Pyxel at 50 FPS, but run gameplay simulation/render cadence slower to
 # better match observed original pacing without touching menu/UI frame timing.
-GAMEPLAY_FRAME_DIVIDER: int = 5
+# The port still uses an approximate fixed divider rather than fractional
+# cadence; a value of 6 keeps gameplay noticeably closer to the original speed
+# than the previous divider of 5.
+GAMEPLAY_FRAME_DIVIDER: int = 6
 _AUDIO_TICKS_PER_SECOND: int = 120
 _HOST_FRAMES_PER_SECOND: int = 50
 

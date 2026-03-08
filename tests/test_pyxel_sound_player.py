@@ -4,7 +4,7 @@ import sys
 import unittest
 from unittest.mock import patch
 
-from alien_evolution.alienevolution.logic import AlienEvolutionPort
+from alien_evolution.alienevolution.logic import GAMEPLAY_FRAME_DIVIDER, AlienEvolutionPort
 from alien_evolution.pyxel.sound import (
     PyxelAudioPlayer,
     _noise_note_from_hz,
@@ -262,7 +262,10 @@ class PyxelSoundTimelineTests(unittest.TestCase):
         events = runtime.end_frame().audio_events
 
         note_events = [event for event in events if isinstance(event, AudioNoteEvent)]
-        self.assertEqual([event.start_tick for event in note_events], [10, 12, 15, 17, 20])
+        self.assertEqual(
+            [event.start_tick for event in note_events],
+            [10 + runtime._audio_ticks_for_host_frames(host_frame_idx) for host_frame_idx in range(GAMEPLAY_FRAME_DIVIDER)],
+        )
         self.assertTrue(all(event.waveform == "S" for event in note_events))
         self.assertTrue(all(event.effect == "N" for event in note_events))
 

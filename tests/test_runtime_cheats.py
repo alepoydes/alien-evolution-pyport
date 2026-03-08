@@ -5,6 +5,7 @@ import unittest
 from alien_evolution.alienevolution.logic import (
     FSM_STATE_GAMEPLAY_TICK_STAGE_2_FRAME,
     FSM_STATE_GAMEPLAY_TICK_STAGE_1_FRAME,
+    GAMEPLAY_FRAME_DIVIDER,
     FSM_STATE_STREAM_INTERMISSION_FRAME,
     FSM_STATE_WAIT_KEYBOARD_RELEASE_FRAME,
     AlienEvolutionPort,
@@ -13,6 +14,7 @@ from alien_evolution.zx.inputmap import KEY_CHAR_TO_ZX_KEYBOARD_SCAN, ZX_KEYBOAR
 from alien_evolution.zx.runtime import FrameInput
 
 _NEUTRAL_INPUT = FrameInput(joy_kempston=0, keyboard_rows=(0xFF,) * 8)
+_GAMEPLAY_DELAY_AFTER_STEP = max(1, int(GAMEPLAY_FRAME_DIVIDER)) - 1
 
 
 def _frame_input_for_keys(*keys: str) -> FrameInput:
@@ -54,7 +56,7 @@ class RuntimeCheatTests(unittest.TestCase):
 
         gameplay_out = runtime.step(_NEUTRAL_INPUT)
         self.assertEqual(runtime._fsm_state, FSM_STATE_GAMEPLAY_TICK_STAGE_1_FRAME)
-        self.assertEqual(int(gameplay_out.timing.delay_after_step_frames), 4)
+        self.assertEqual(int(gameplay_out.timing.delay_after_step_frames), _GAMEPLAY_DELAY_AFTER_STEP)
         self.assertEqual(runtime.var_active_map_mode & 0xFF, 0x01)
         self.assertEqual(runtime.var_runtime_objective_counter & 0xFF, 0x06)
 
@@ -69,7 +71,7 @@ class RuntimeCheatTests(unittest.TestCase):
                 gameplay_out = runtime.step(_NEUTRAL_INPUT)
 
                 self.assertEqual(runtime._fsm_state, FSM_STATE_GAMEPLAY_TICK_STAGE_1_FRAME)
-                self.assertEqual(int(gameplay_out.timing.delay_after_step_frames), 4)
+                self.assertEqual(int(gameplay_out.timing.delay_after_step_frames), _GAMEPLAY_DELAY_AFTER_STEP)
                 self.assertEqual(runtime.var_active_map_mode & 0xFF, expected_mode)
                 self.assertEqual(runtime.var_runtime_objective_counter & 0xFF, 0x06)
 
@@ -77,10 +79,11 @@ class RuntimeCheatTests(unittest.TestCase):
                 runtime.advance_host_frame()
                 runtime.advance_host_frame()
                 runtime.advance_host_frame()
+                runtime.advance_host_frame()
                 next_out = runtime.step(_NEUTRAL_INPUT)
 
                 self.assertEqual(runtime._fsm_state, FSM_STATE_GAMEPLAY_TICK_STAGE_2_FRAME)
-                self.assertEqual(int(next_out.timing.delay_after_step_frames), 4)
+                self.assertEqual(int(next_out.timing.delay_after_step_frames), _GAMEPLAY_DELAY_AFTER_STEP)
                 self.assertEqual(runtime._fsm_transition_kind, "none")
 
     def test_unknown_cheat_is_ignored(self) -> None:

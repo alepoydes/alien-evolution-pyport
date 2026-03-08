@@ -8,6 +8,7 @@ from alien_evolution.alienevolution.logic import (
     FSM_STATE_GAMEPLAY_TICK_STAGE_1_FRAME,
     FSM_STATE_GAMEPLAY_TICK_STAGE_2_FRAME,
     FSM_STATE_GAMEPLAY_TICK_STAGE_3_FRAME,
+    GAMEPLAY_FRAME_DIVIDER,
     FSM_STATE_MENU_IDLE_POLL_FRAME,
     FSM_STATE_MENU_POST_ACTION_FRAME,
     FSM_STATE_SCHEDULER_AUTONOMOUS_FRAME,
@@ -20,6 +21,7 @@ from alien_evolution.zx.runtime import FrameInput, StepOutput
 
 
 _NEUTRAL_INPUT = FrameInput(joy_kempston=0, keyboard_rows=(0xFF,) * 8)
+_GAMEPLAY_DELAY_AFTER_STEP = max(1, int(GAMEPLAY_FRAME_DIVIDER)) - 1
 
 
 @dataclass
@@ -255,13 +257,13 @@ class GameplayPacingRegressionTests(unittest.TestCase):
         pre_release, post_release, release_out = harness.run_until_step_with_states(_NEUTRAL_INPUT)
         self.assertEqual(pre_release, FSM_STATE_WAIT_KEYBOARD_RELEASE_FRAME)
         self.assertEqual(post_release, FSM_STATE_GAMEPLAY_TICK_STAGE_1_FRAME)
-        self.assertEqual(int(release_out.timing.delay_after_step_frames), 4)
+        self.assertEqual(int(release_out.timing.delay_after_step_frames), _GAMEPLAY_DELAY_AFTER_STEP)
 
         _ = self._assert_transition_chain(
             harness,
             start_state=FSM_STATE_GAMEPLAY_TICK_STAGE_1_FRAME,
             expected_post_states=self._EXPECTED_POST_TICK1_TO_BRANCH,
-            expected_delays=(4, 4, 4, 4),
+            expected_delays=(_GAMEPLAY_DELAY_AFTER_STEP,) * 4,
         )
         self.assertEqual(runtime._fsm_state, FSM_STATE_GAMEPLAY_BRANCH)
         self.assertEqual(
@@ -299,7 +301,7 @@ class GameplayPacingRegressionTests(unittest.TestCase):
         pre_release, post_release, release_out = harness.run_until_step_with_states(_NEUTRAL_INPUT)
         self.assertEqual(pre_release, FSM_STATE_WAIT_KEYBOARD_RELEASE_FRAME)
         self.assertEqual(post_release, FSM_STATE_GAMEPLAY_TICK_STAGE_1_FRAME)
-        self.assertEqual(int(release_out.timing.delay_after_step_frames), 4)
+        self.assertEqual(int(release_out.timing.delay_after_step_frames), _GAMEPLAY_DELAY_AFTER_STEP)
         start_cell = runtime.var_runtime_current_cell_ptr.index
         start_coords = runtime.var_current_map_coords.snapshot()
 
@@ -307,7 +309,7 @@ class GameplayPacingRegressionTests(unittest.TestCase):
             harness,
             start_state=FSM_STATE_GAMEPLAY_TICK_STAGE_1_FRAME,
             expected_post_states=self._EXPECTED_POST_TICK1_TO_BRANCH,
-            expected_delays=(4, 4, 4, 4),
+            expected_delays=(_GAMEPLAY_DELAY_AFTER_STEP,) * 4,
         )
         self.assertEqual(runtime._fsm_state, FSM_STATE_GAMEPLAY_BRANCH)
         self.assertEqual(runtime.var_runtime_current_cell_ptr.index, start_cell)
@@ -323,7 +325,7 @@ class GameplayPacingRegressionTests(unittest.TestCase):
             harness,
             start_state=FSM_STATE_GAMEPLAY_BRANCH,
             expected_post_states=(FSM_STATE_GAMEPLAY_BRANCH,),
-            expected_delays=(4,),
+            expected_delays=(_GAMEPLAY_DELAY_AFTER_STEP,),
         )
         cell_after_down = runtime.var_runtime_current_cell_ptr.index
         coords_after_down = runtime.var_current_map_coords.snapshot()
@@ -335,7 +337,7 @@ class GameplayPacingRegressionTests(unittest.TestCase):
         )
         self.assertEqual(len(transitions_after_down), 1)
         self.assertEqual(coords_after_down, (coords_before_down[0], coords_before_down[1] + 1))
-        self.assertEqual(int(out_down.timing.delay_after_step_frames), 4)
+        self.assertEqual(int(out_down.timing.delay_after_step_frames), _GAMEPLAY_DELAY_AFTER_STEP)
         self.assertLessEqual(harness.step_counter, 100)
 
     def test_splash_down_requires_release_and_preserves_source_start_position(self) -> None:
@@ -370,13 +372,13 @@ class GameplayPacingRegressionTests(unittest.TestCase):
         pre_release, post_release, release_out = harness.run_until_step_with_states(_NEUTRAL_INPUT)
         self.assertEqual(pre_release, FSM_STATE_WAIT_KEYBOARD_RELEASE_FRAME)
         self.assertEqual(post_release, FSM_STATE_GAMEPLAY_TICK_STAGE_1_FRAME)
-        self.assertEqual(int(release_out.timing.delay_after_step_frames), 4)
+        self.assertEqual(int(release_out.timing.delay_after_step_frames), _GAMEPLAY_DELAY_AFTER_STEP)
 
         _ = self._assert_transition_chain(
             harness,
             start_state=FSM_STATE_GAMEPLAY_TICK_STAGE_1_FRAME,
             expected_post_states=self._EXPECTED_POST_TICK1_TO_BRANCH,
-            expected_delays=(4, 4, 4, 4),
+            expected_delays=(_GAMEPLAY_DELAY_AFTER_STEP,) * 4,
         )
         self.assertEqual(runtime._fsm_state, FSM_STATE_GAMEPLAY_BRANCH)
         self.assertEqual(runtime.var_runtime_current_cell_ptr.index, expected_start_cell)
@@ -407,13 +409,13 @@ class GameplayPacingRegressionTests(unittest.TestCase):
         pre_release, post_release, release_out = harness.run_until_step_with_states(_NEUTRAL_INPUT)
         self.assertEqual(pre_release, FSM_STATE_WAIT_KEYBOARD_RELEASE_FRAME)
         self.assertEqual(post_release, FSM_STATE_GAMEPLAY_TICK_STAGE_1_FRAME)
-        self.assertEqual(int(release_out.timing.delay_after_step_frames), 4)
+        self.assertEqual(int(release_out.timing.delay_after_step_frames), _GAMEPLAY_DELAY_AFTER_STEP)
 
         _ = self._assert_transition_chain(
             harness,
             start_state=FSM_STATE_GAMEPLAY_TICK_STAGE_1_FRAME,
             expected_post_states=self._EXPECTED_POST_TICK1_TO_BRANCH,
-            expected_delays=(4, 4, 4, 4),
+            expected_delays=(_GAMEPLAY_DELAY_AFTER_STEP,) * 4,
         )
         self.assertEqual(runtime._fsm_state, FSM_STATE_GAMEPLAY_BRANCH)
         self.assertEqual(runtime.var_runtime_current_cell_ptr.index, expected_start_cell)
