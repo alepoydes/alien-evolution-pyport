@@ -4,7 +4,7 @@ import sys
 import unittest
 from unittest.mock import patch
 
-from alien_evolution.alienevolution.logic import GAMEPLAY_FRAME_DIVIDER, AlienEvolutionPort
+from alien_evolution.alienevolution.logic import GAMEPLAY_FRAME_DIVIDER, AlienEvolutionPort, ForcedInterpreterAbort
 from alien_evolution.pyxel.sound import (
     PyxelAudioPlayer,
     _noise_note_from_hz,
@@ -246,6 +246,58 @@ class PyxelSoundTimelineTests(unittest.TestCase):
             max(int(event.start_tick) + int(event.duration_ticks) for event in note_events),
             30,
         )
+
+    def test_pre_delay_calibration_helper_uses_exact_z80_loop_cost_for_default_wait(self) -> None:
+        runtime = AlienEvolutionPort()
+        runtime.begin_frame(FrameInput())
+        runtime._reset_stream_audio_timing_state()
+
+        timing_cost = runtime.pre_delay_calibration_helper()
+
+        # FC82..FC86 entry = 21 t
+        # FC87..FC9F setup/teardown = 59 t
+        # Each outer pass = 255 * 93 + 88 + 14 = 23817 t
+        # Default wait comes from (~0xEE) & 0xFF = 0x11.
+        self.assertEqual(timing_cost, 404969)
+        self.assertEqual(runtime._stream_lane_ticks[:2], [14, 14])
+
+    def test_pre_delay_calibration_helper_uses_exact_z80_loop_cost_for_explicit_wait(self) -> None:
+        runtime = AlienEvolutionPort()
+        runtime.begin_frame(FrameInput())
+        runtime._reset_stream_audio_timing_state()
+
+        timing_cost = runtime.pre_delay_calibration_helper(C_wait=0x04)
+
+        self.assertEqual(timing_cost, 95327)
+        self.assertEqual(runtime._stream_lane_ticks[:2], [3, 3])
+
+    def test_stream_presets_regress_full_duration_after_exact_predelay_fix(self) -> None:
+        expected_tail_ticks = {
+            "a": 835,
+            "b": 5279,
+            "c": 1395,
+        }
+
+        for preset_name, expected_tail in expected_tail_ticks.items():
+            runtime = AlienEvolutionPort()
+            runtime.begin_frame(
+                FrameInput(
+                    audio_clock=AudioClockSnapshot(current_epoch_id=0, safe_start_tick=0, fill_until_tick=0),
+                )
+            )
+            runtime._stream_ptr_a = BlockPtr(getattr(runtime, f"const_scenario_preset_{preset_name}_stream_1"), 0x0000)
+            runtime._stream_ptr_b = runtime._stream_ptr_a.add(0x0001)
+            runtime._stream_ptr_c = BlockPtr(getattr(runtime, f"const_scenario_preset_{preset_name}_stream_2"), 0x0000)
+            runtime._stream_ptr_d = runtime._stream_ptr_c.add(0x0001)
+            runtime._reset_stream_audio_timing_state()
+
+            with self.subTest(preset=preset_name):
+                try:
+                    while True:
+                        runtime.core_command_interpreter_scenario_stream_engine()
+                except ForcedInterpreterAbort:
+                    pass
+                self.assertEqual(runtime.audio_epoch_tail(), expected_tail)
 
     def test_teleport_entry_queues_audio_for_each_host_frame(self) -> None:
         runtime = AlienEvolutionPort()

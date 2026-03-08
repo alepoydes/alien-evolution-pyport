@@ -6237,20 +6237,38 @@ class AlienEvolutionPort(StatefulManifestRuntime, AlienEvolutionData, ZXSpectrum
 
     # ZX 0xFC82..0xFC9F
     def pre_delay_calibration_helper(self, C_wait=None) -> int:
+        entry_clock_units = 0
         if C_wait is None:
             timing_ctl = self.var_stream_timing_control_byte & 0xFF
             C_wait = (~timing_ctl) & 0xFF
+            # FC82..FC86: LD A,(FBEF) / CPL / LD C,A
+            entry_clock_units = 13 + 4 + 4
         C_wait &= 0xFF
         outer = C_wait if C_wait != 0x00 else 0x100
-        # FC82..FC96 delay loop approximation (8-bit nested counters with NOP pad).
+        # Exact FC87..FC9F timing model.
         #
-        # IMPORTANT: The old implementation executed a Python busy-wait loop
-        # (nested `for ...: pass`) to mimic the Z80 delay.
+        # The previous approximation treated this helper like a cheap
+        # 13-tstate inner spin. That misses almost the entire cost of the real
+        # Z80 loop: PUSH/POP traffic around every inner pass, the three
+        # `SRA (HL)` memory shifts, and the DEC/JP outer-loop control.
         #
-        # For the port we only need the *timing cost* as a number consumed by
-        # the outer pacing logic; burning real CPU time is counter-productive
-        # (especially in Pyodide).
-        total_clock_units = int(outer * 0x100 * 13)
+        # Per outer pass with B initialised to 0x00:
+        # - 255 taken inner iterations: 93 t each
+        # - final inner iteration:      88 t
+        # - DEC C / JP NZ tail:         14 t
+        #
+        # One-shot setup/teardown around the whole helper:
+        # - PUSH BC / PUSH AF / LD B,0: 29 t
+        # - POP AF / POP BC / RET:      30 t
+        #
+        # Crucial gameplay consequence: the stream presets used by the pre-level
+        # splash interleave these silent calibration segments with audible pulse
+        # bursts. Underestimating them makes the command stream terminate a few
+        # seconds early relative to the scheduled audio, so the splash drops to
+        # gameplay before the music finishes. Using the exact loop cost keeps the
+        # stream-duration clock and the emitted audio timeline in agreement.
+        outer_pass_clock_units = (255 * 93) + 88 + 14
+        total_clock_units = entry_clock_units + 29 + (outer * outer_pass_clock_units) + 30
 
         # This path is a timed silent segment in the original stream interpreter.
         # Advance both semantic mixer channels to preserve relative timing.
