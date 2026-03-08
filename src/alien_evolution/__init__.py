@@ -5,6 +5,14 @@ This package intentionally focuses on:
 - backend-agnostic game logic API (`reset`/`step`);
 - peripheral backends implemented in dedicated subpackages.
 
+Audio model:
+- game/runtime code emits semantic audio events with explicit tick positions;
+- backends own real-time scheduling and convert those events to playback;
+- runtimes never query backend clocks and only consume backend-provided audio
+  timing snapshots;
+- headless and GUI backends may compute those snapshots differently while
+  keeping the same runtime contract.
+
 The actual game logic should live in :mod:`alien_evolution.alienevolution.logic`.
 The lightweight demo implementation lives in :mod:`alien_evolution.demoline.logic`.
 """

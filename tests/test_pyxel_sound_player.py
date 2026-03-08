@@ -82,7 +82,7 @@ class PyxelSoundTimelineTests(unittest.TestCase):
         runtime = AlienEvolutionPort()
         runtime.begin_frame(
             FrameInput(
-                audio_clock=AudioClockSnapshot(current_epoch_id=0, current_tick=12),
+                audio_clock=AudioClockSnapshot(current_epoch_id=0, safe_start_tick=12, fill_until_tick=12),
             )
         )
 
@@ -91,6 +91,7 @@ class PyxelSoundTimelineTests(unittest.TestCase):
             freq_hz=440.0,
             duration_ticks=5,
             volume=5,
+            start_tick=runtime.audio_clock.safe_start_tick,
             source="rom_beeper",
         )
         next_epoch = runtime.schedule_reset(20)
@@ -123,7 +124,7 @@ class PyxelSoundTimelineTests(unittest.TestCase):
         runtime = AlienEvolutionPort()
         runtime.begin_frame(
             FrameInput(
-                audio_clock=AudioClockSnapshot(current_epoch_id=0, current_tick=17),
+                audio_clock=AudioClockSnapshot(current_epoch_id=0, safe_start_tick=17, fill_until_tick=17),
             )
         )
 
@@ -132,6 +133,7 @@ class PyxelSoundTimelineTests(unittest.TestCase):
             freq_hz=440.0,
             duration_ticks=5,
             volume=5,
+            start_tick=runtime.audio_clock.safe_start_tick,
             source="rom_beeper",
         )
         event = runtime.end_frame().audio_events[0]
@@ -158,11 +160,35 @@ class PyxelSoundTimelineTests(unittest.TestCase):
         self.assertEqual(events[1].waveform, "S")
         self.assertEqual(events[1].start_tick, events[0].duration_ticks)
 
+    def test_emit_helpers_require_explicit_start_tick(self) -> None:
+        runtime = AlienEvolutionPort()
+        runtime.begin_frame(FrameInput())
+
+        with self.assertRaises(TypeError):
+            runtime.emit_audio(
+                waveform="S",
+                freq_hz=440.0,
+                duration_s=0.1,
+                volume=5,
+            )
+        with self.assertRaises(TypeError):
+            runtime.emit_immediate_sfx(
+                waveform="S",
+                freq_hz=440.0,
+                duration_ticks=5,
+                volume=5,
+            )
+        with self.assertRaises(TypeError):
+            runtime.emit_rom_beeper(
+                period=100,
+                ticks=10,
+            )
+
     def test_fsm_start_stream_queues_mode_reset(self) -> None:
         runtime = AlienEvolutionPort()
         runtime.begin_frame(
             FrameInput(
-                audio_clock=AudioClockSnapshot(current_epoch_id=0, current_tick=8),
+                audio_clock=AudioClockSnapshot(current_epoch_id=0, safe_start_tick=8, fill_until_tick=24),
             )
         )
         runtime.emit_immediate_sfx(
@@ -170,6 +196,7 @@ class PyxelSoundTimelineTests(unittest.TestCase):
             freq_hz=440.0,
             duration_ticks=5,
             volume=5,
+            start_tick=runtime.audio_clock.safe_start_tick,
             source="rom_beeper",
         )
 
@@ -189,7 +216,7 @@ class PyxelSoundTimelineTests(unittest.TestCase):
         runtime = AlienEvolutionPort()
         runtime.begin_frame(
             FrameInput(
-                audio_clock=AudioClockSnapshot(current_epoch_id=0, current_tick=10),
+                audio_clock=AudioClockSnapshot(current_epoch_id=0, safe_start_tick=10, fill_until_tick=10),
             )
         )
 
@@ -205,11 +232,26 @@ class PyxelSoundTimelineTests(unittest.TestCase):
             10 + runtime._rom_beeper_duration_ticks(de_ticks=0x0032, hl_period=0x0032),
         )
 
+    def test_stream_step_prefills_audio_until_fill_target(self) -> None:
+        runtime = AlienEvolutionPort()
+        output = runtime.step(
+            FrameInput(
+                audio_clock=AudioClockSnapshot(current_epoch_id=0, safe_start_tick=10, fill_until_tick=40),
+            )
+        )
+
+        note_events = [event for event in output.audio_events if isinstance(event, AudioNoteEvent)]
+        self.assertTrue(note_events)
+        self.assertGreaterEqual(
+            max(int(event.start_tick) + int(event.duration_ticks) for event in note_events),
+            30,
+        )
+
     def test_teleport_entry_queues_audio_for_each_host_frame(self) -> None:
         runtime = AlienEvolutionPort()
         runtime.begin_frame(
             FrameInput(
-                audio_clock=AudioClockSnapshot(current_epoch_id=0, current_tick=10),
+                audio_clock=AudioClockSnapshot(current_epoch_id=0, safe_start_tick=10, fill_until_tick=10),
             )
         )
         runtime.var_runtime_current_cell_ptr = BlockPtr(runtime.var_level_map_mode_0, 0x0000)
@@ -260,7 +302,8 @@ class PyxelSoundTimelineTests(unittest.TestCase):
         snap = player.clock_snapshot(now_s=10.5)
 
         self.assertEqual(snap.current_epoch_id, 0)
-        self.assertEqual(snap.current_tick, 60)
+        self.assertEqual(snap.safe_start_tick, 63)
+        self.assertEqual(snap.fill_until_tick, 156)
 
     def test_reset_switches_epoch_on_wall_clock_cut(self) -> None:
         fake_pyxel = _FakePyxel()
@@ -272,8 +315,48 @@ class PyxelSoundTimelineTests(unittest.TestCase):
             snap = player.clock_snapshot(now_s=10.1)
 
         self.assertEqual(snap.current_epoch_id, 1)
-        self.assertEqual(snap.current_tick, 0)
+        self.assertEqual(snap.safe_start_tick, 3)
+        self.assertEqual(snap.fill_until_tick, 96)
         self.assertEqual(fake_pyxel.stop_calls, [None])
+
+    def test_reset_truncates_old_epoch_audio_but_keeps_next_epoch_audio(self) -> None:
+        fake_pyxel = _FakePyxel()
+        player = PyxelAudioPlayer()
+        player._epoch_origin_time_s = 10.0
+        player.submit(
+            (
+                AudioNoteEvent(
+                    epoch_id=0,
+                    start_tick=0,
+                    duration_ticks=20,
+                    waveform="S",
+                    freq_hz=440.0,
+                    volume=5,
+                    source="stream_music",
+                    priority=10,
+                ),
+                AudioResetEvent(epoch_id=0, cut_tick=5, next_epoch_id=1),
+                AudioNoteEvent(
+                    epoch_id=1,
+                    start_tick=0,
+                    duration_ticks=8,
+                    waveform="S",
+                    freq_hz=220.0,
+                    volume=5,
+                    source="rom_beeper",
+                    priority=30,
+                ),
+            ),
+            now_s=10.0,
+        )
+
+        with patch.dict(sys.modules, {"pyxel": fake_pyxel}):
+            player.update(now_s=10.0)
+            player.update(now_s=10.05)
+
+        non_rest_calls = [call for sound in fake_pyxel.sounds for call in sound.calls if call.get("notes") != "R"]
+        self.assertTrue(any(call.get("speed") == 5 for call in non_rest_calls))
+        self.assertTrue(any(call.get("speed") == 7 for call in non_rest_calls))
 
     def test_scheduler_keeps_explicit_rest_between_equal_notes(self) -> None:
         fake_pyxel = _FakePyxel()

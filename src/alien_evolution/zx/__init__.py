@@ -1,8 +1,14 @@
-"""ZX Spectrum emulation-facing helpers for the port.
+"""ZX Spectrum-facing runtime contracts and helpers.
 
 This subpackage contains:
 - ZX screen buffer layouts and address mapping,
 - frame-step runtime contracts and service helpers.
+
+Architectural contract:
+- backends call runtimes through `reset()` / `step()`;
+- backends provide sampled input and audio timing snapshots;
+- runtimes return semantic screen/audio/timing output only;
+- runtimes must not call backend APIs, schedulers, or real clocks directly.
 """
 
 from .screen import (

@@ -870,19 +870,17 @@ class RuntimeStateRoundtripTests(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, "_fsm_stream_ctx"):
             runtime._fsm_state_stream_intermission_frame()
 
-    def test_stream_state_fails_fast_without_timing_debt(self) -> None:
+    def test_stream_state_fails_fast_without_return_state(self) -> None:
         runtime = AlienEvolutionPort()
         runtime._fsm_stream_ctx = {
             "abort_on_keypress": True,
-            "return_state": FSM_STATE_MENU_INIT,
         }
-        with self.assertRaisesRegex(RuntimeError, "timing_debt"):
+        with self.assertRaisesRegex(RuntimeError, "return_state"):
             runtime._fsm_state_stream_intermission_frame()
 
     def test_stream_state_fails_fast_without_abort_on_keypress(self) -> None:
         runtime = AlienEvolutionPort()
         runtime._fsm_stream_ctx = {
-            "timing_debt": 0,
             "return_state": FSM_STATE_MENU_INIT,
         }
         with self.assertRaisesRegex(RuntimeError, "abort_on_keypress"):

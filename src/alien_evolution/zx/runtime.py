@@ -30,25 +30,49 @@ def _default_audio_priority(source: str) -> int:
 
 @dataclass(frozen=True, slots=True)
 class AudioClockSnapshot:
+    """Backend-provided audio timing snapshot sampled for one `step()`.
+
+    The runtime never observes backend playhead time directly. Instead, the
+    backend passes two explicit scheduling pointers:
+    - `safe_start_tick`: earliest future tick where a newly emitted "play now"
+      sound is guaranteed not to land in the backend's past.
+    - `fill_until_tick`: minimum audio frontier that stream/music logic should
+      fill ahead to for this step.
+
+    Backends own all real clocks and may compute these pointers differently
+    (Pyxel from wall-clock time, headless from deterministic host-frame time)
+    while preserving the same game-facing contract.
+    """
+
     current_epoch_id: int = 0
-    current_tick: int = 0
+    safe_start_tick: int = 0
+    fill_until_tick: int = 0
 
     def __post_init__(self) -> None:
         epoch = max(0, int(self.current_epoch_id))
         if epoch != self.current_epoch_id:
             object.__setattr__(self, "current_epoch_id", epoch)
-        tick = max(0, int(self.current_tick))
-        if tick != self.current_tick:
-            object.__setattr__(self, "current_tick", tick)
+        safe_start_tick = max(0, int(self.safe_start_tick))
+        if safe_start_tick != self.safe_start_tick:
+            object.__setattr__(self, "safe_start_tick", safe_start_tick)
+        fill_until_tick = max(safe_start_tick, int(self.fill_until_tick))
+        if fill_until_tick != self.fill_until_tick:
+            object.__setattr__(self, "fill_until_tick", fill_until_tick)
 
 
 @dataclass(frozen=True, slots=True)
 class FrameInput:
-    """Buttons/joystick snapshot sampled for one frame."""
+    """Buttons/joystick snapshot sampled for one frame.
+
+    Backends are expected to populate `audio_clock` before calling `step()`.
+    When omitted, runtime/service-layer helpers normalize it to a zeroed
+    snapshot. This keeps headless/raw input parsing able to distinguish
+    "missing audio timing" from "explicit timing override".
+    """
 
     joy_kempston: int = 0
     keyboard_rows: tuple[int, ...] = _DEFAULT_KEYBOARD_ROWS
-    audio_clock: AudioClockSnapshot = field(default_factory=AudioClockSnapshot)
+    audio_clock: AudioClockSnapshot | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -139,7 +163,16 @@ class StepOutput:
 
 
 class FrameStepRuntime(Protocol):
-    """Runtime contract used by GUI/CLI wrappers."""
+    """Runtime contract used by GUI/CLI backends.
+
+    Directionality is intentional: backends own clocks, input sampling, and the
+    outer frame loop. They call `reset()` / `step()` and provide a fully formed
+    `FrameInput`, including the backend-owned audio timing snapshot.
+
+    Runtimes must not import or call backend packages, wall-clock APIs, or
+    backend schedulers. They only consume sampled inputs and return semantic
+    screen/audio/timing output.
+    """
 
     def reset(self) -> None:
         ...
@@ -152,7 +185,13 @@ StatefulRuntime = _StatefulRuntime
 
 
 class ZXSpectrumServiceLayer:
-    """Narrow ZX-facing service layer for frame-based game runtimes."""
+    """Narrow ZX-facing service layer for backend-agnostic frame runtimes.
+
+    This layer stores only sampled per-step state. It is not an audio backend
+    and does not expose live clock queries. Runtime code must schedule audio
+    against explicit ticks derived from the sampled `audio_clock` snapshot, and
+    return semantic audio events for a backend to realize later.
+    """
 
     def __init__(self, screen_bitmap: bytearray, screen_attrs: bytearray) -> None:
         if len(screen_bitmap) != ZX_BITMAP_BYTES:
@@ -173,6 +212,7 @@ class ZXSpectrumServiceLayer:
         self._audio_emit_epoch_id: int = 0
         self._audio_events: list[AudioEvent] = []
         self._audio_epoch_tails: dict[int, int] = {0: 0}
+        self._audio_epoch_origin_offsets: dict[int, int] = {0: 0}
         self._pending_delay_after_step_frames: int = 0
 
     def reset_zx_output(self) -> None:
@@ -183,6 +223,7 @@ class ZXSpectrumServiceLayer:
         self._audio_emit_epoch_id = 0
         self._audio_events.clear()
         self._audio_epoch_tails = {0: 0}
+        self._audio_epoch_origin_offsets = {0: 0}
         for i in range(len(self.screen_bitmap)):
             self.screen_bitmap[i] = 0
         for i in range(len(self.screen_attrs)):
@@ -204,9 +245,12 @@ class ZXSpectrumServiceLayer:
             return
         normalized = AudioClockSnapshot(
             current_epoch_id=snapshot.current_epoch_id,
-            current_tick=snapshot.current_tick,
+            safe_start_tick=snapshot.safe_start_tick,
+            fill_until_tick=snapshot.fill_until_tick,
         )
         self._audio_clock = normalized
+        if normalized.current_epoch_id not in self._audio_epoch_origin_offsets:
+            self._audio_epoch_origin_offsets = {normalized.current_epoch_id: 0}
         self._ensure_audio_epoch(normalized.current_epoch_id)
         if self._audio_emit_epoch_id < normalized.current_epoch_id:
             self._audio_emit_epoch_id = normalized.current_epoch_id
@@ -223,7 +267,8 @@ class ZXSpectrumServiceLayer:
             keyboard_rows=self._normalize_keyboard_rows(keyboard_rows),
             audio_clock=AudioClockSnapshot(
                 current_epoch_id=(audio_clock.current_epoch_id if audio_clock is not None else 0),
-                current_tick=(audio_clock.current_tick if audio_clock is not None else 0),
+                safe_start_tick=(audio_clock.safe_start_tick if audio_clock is not None else 0),
+                fill_until_tick=(audio_clock.fill_until_tick if audio_clock is not None else 0),
             ),
         )
         self._sync_audio_clock(audio_clock)
@@ -288,17 +333,28 @@ class ZXSpectrumServiceLayer:
     def _ensure_audio_epoch(self, epoch_id: int) -> None:
         epoch = max(0, int(epoch_id))
         self._audio_epoch_tails.setdefault(epoch, 0)
+        self._audio_epoch_origin_offsets.setdefault(epoch, 0)
 
     def audio_epoch_tail(self, epoch_id: int | None = None) -> int:
         epoch = self._audio_emit_epoch_id if epoch_id is None else max(0, int(epoch_id))
         self._ensure_audio_epoch(epoch)
         return max(0, int(self._audio_epoch_tails.get(epoch, 0)))
 
-    def current_audio_tick(self, *, epoch_id: int | None = None) -> int:
-        epoch = self._audio_emit_epoch_id if epoch_id is None else max(0, int(epoch_id))
-        if epoch != self._audio_clock.current_epoch_id:
-            return 0
-        return max(0, int(self._audio_clock.current_tick))
+    def _audio_epoch_relative_offset(self, epoch_id: int | None = None) -> int:
+        target_epoch = self._audio_emit_epoch_id if epoch_id is None else max(0, int(epoch_id))
+        current_epoch = max(0, int(self._audio_clock.current_epoch_id))
+        current_offset = int(self._audio_epoch_origin_offsets.get(current_epoch, 0))
+        target_offset = int(self._audio_epoch_origin_offsets.get(target_epoch, current_offset))
+        return max(0, target_offset - current_offset)
+
+    def _audio_safe_start_tick_for_epoch(self, epoch_id: int | None = None) -> int:
+        relative_offset = self._audio_epoch_relative_offset(epoch_id)
+        return max(0, int(self._audio_clock.safe_start_tick) - relative_offset)
+
+    def _audio_fill_until_tick_for_epoch(self, epoch_id: int | None = None) -> int:
+        relative_offset = self._audio_epoch_relative_offset(epoch_id)
+        safe_start_tick = self._audio_safe_start_tick_for_epoch(epoch_id)
+        return max(safe_start_tick, int(self._audio_clock.fill_until_tick) - relative_offset)
 
     def in_port(self, bc_port: int) -> int:
         if (bc_port & 0x00FF) == 0x1F:
@@ -358,22 +414,18 @@ class ZXSpectrumServiceLayer:
         freq_hz: float,
         duration_s: float,
         volume: int,
+        start_tick: int,
         source: str = "generic",
         priority: int | None = None,
-        start_tick: int | None = None,
         epoch_id: int | None = None,
     ) -> None:
         epoch = self._audio_emit_epoch_id if epoch_id is None else max(0, int(epoch_id))
         duration_ticks = self._duration_ticks_from_seconds(duration_s)
-        if start_tick is None:
-            start = self.current_audio_tick(epoch_id=epoch)
-        else:
-            start = max(0, int(start_tick))
         self.emit_note_event(
             waveform=waveform,
             effect=effect,
             freq_hz=freq_hz,
-            start_tick=start,
+            start_tick=max(0, int(start_tick)),
             duration_ticks=duration_ticks,
             volume=volume,
             source=source,
@@ -389,17 +441,17 @@ class ZXSpectrumServiceLayer:
         freq_hz: float,
         duration_ticks: int,
         volume: int,
+        start_tick: int,
         source: str = "generic",
         priority: int | None = None,
         epoch_id: int | None = None,
     ) -> None:
         epoch = self._audio_emit_epoch_id if epoch_id is None else max(0, int(epoch_id))
-        start_tick = self.current_audio_tick(epoch_id=epoch)
         self.emit_note_event(
             waveform=waveform,
             effect=effect,
             freq_hz=freq_hz,
-            start_tick=start_tick,
+            start_tick=max(0, int(start_tick)),
             duration_ticks=duration_ticks,
             volume=volume,
             source=source,
@@ -411,9 +463,14 @@ class ZXSpectrumServiceLayer:
         epoch = max(0, int(self._audio_emit_epoch_id))
         if cut_tick is None:
             cut = self.audio_epoch_tail(epoch)
+            if cut <= 0:
+                cut = self._audio_safe_start_tick_for_epoch(epoch)
         else:
             cut = max(0, int(cut_tick))
         next_epoch = max(epoch + 1, self._audio_clock.current_epoch_id + 1)
+        self._audio_epoch_origin_offsets[next_epoch] = (
+            int(self._audio_epoch_origin_offsets.get(epoch, 0)) + cut
+        )
         self._audio_events.append(
             AudioResetEvent(
                 epoch_id=epoch,
@@ -447,9 +504,9 @@ class ZXSpectrumServiceLayer:
         effect: AudioEffect = "N",
         *,
         volume: int = 5,
+        start_tick: int,
         source: str = "rom_beeper",
         priority: int | None = None,
-        start_tick: int | None = None,
         epoch_id: int | None = None,
     ) -> None:
         freq = self.rom_beeper_freq_hz(period)

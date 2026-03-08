@@ -2,13 +2,26 @@ from __future__ import annotations
 
 import json
 from collections.abc import Iterator
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Protocol, TextIO
 
 from .rzx import RZXFrameInputIterator
-from ..zx.runtime import AudioEvent, AudioNoteEvent, AudioResetEvent, FrameInput, FrameStepRuntime, StepOutput
+from ..zx.runtime import (
+    AudioClockSnapshot,
+    AudioEvent,
+    AudioNoteEvent,
+    AudioResetEvent,
+    FrameInput,
+    FrameStepRuntime,
+    StepOutput,
+)
 
-_FILEIO_FORMAT = "alien-evolution-fileio-v2"
+_FILEIO_FORMAT = "alien-evolution-fileio-v3"
+_HEADLESS_AUDIO_HORIZON_TICKS = 96
+_HEADLESS_AUDIO_LEAD_TICKS = 3
+_HEADLESS_AUDIO_TICK_DEN = 5
+_HEADLESS_AUDIO_TICK_NUM_PER_HOST_FRAME = 12
 
 
 class ScreenFrameWriter(Protocol):
@@ -40,10 +53,99 @@ def _parse_frame_input_record(obj: object, *, source: str) -> FrameInput:
             raise ValueError(f"{source}: keyboard_rows[{idx}] must be an integer")
         vals.append(row & 0xFF)
 
+    raw_audio_clock = obj.get("audio_clock")
+    audio_clock: AudioClockSnapshot | None = None
+    if raw_audio_clock is not None:
+        if not isinstance(raw_audio_clock, dict):
+            raise ValueError(f"{source}: audio_clock must be an object when provided")
+        current_epoch_id = raw_audio_clock.get("current_epoch_id", 0)
+        safe_start_tick = raw_audio_clock.get("safe_start_tick", 0)
+        fill_until_tick = raw_audio_clock.get("fill_until_tick", safe_start_tick)
+        for field_name, field_value in (
+            ("current_epoch_id", current_epoch_id),
+            ("safe_start_tick", safe_start_tick),
+            ("fill_until_tick", fill_until_tick),
+        ):
+            if not isinstance(field_value, int):
+                raise ValueError(f"{source}: audio_clock.{field_name} must be an integer")
+        audio_clock = AudioClockSnapshot(
+            current_epoch_id=current_epoch_id,
+            safe_start_tick=safe_start_tick,
+            fill_until_tick=fill_until_tick,
+        )
+
     return FrameInput(
         joy_kempston=raw_joy & 0x1F,
         keyboard_rows=tuple(vals),
+        audio_clock=audio_clock,
     )
+
+
+def _audio_clock_to_dict(clock: AudioClockSnapshot) -> dict[str, int]:
+    return {
+        "current_epoch_id": int(clock.current_epoch_id),
+        "safe_start_tick": int(clock.safe_start_tick),
+        "fill_until_tick": int(clock.fill_until_tick),
+    }
+
+
+@dataclass(slots=True)
+class _HeadlessAudioClockDriver:
+    """Deterministic backend-owned audio timing for file/headless runners."""
+
+    horizon_ticks: int = _HEADLESS_AUDIO_HORIZON_TICKS
+    lead_ticks: int = _HEADLESS_AUDIO_LEAD_TICKS
+    _active_epoch_id: int = field(init=False, default=0)
+    _elapsed_tick_num: int = field(init=False, default=0)
+    _epoch_reset_events: dict[int, AudioResetEvent] = field(init=False, default_factory=dict)
+
+    def __post_init__(self) -> None:
+        self.horizon_ticks = max(1, int(self.horizon_ticks))
+        self.lead_ticks = max(0, int(self.lead_ticks))
+
+    def _playhead_tick(self) -> int:
+        return max(0, int(self._elapsed_tick_num // _HEADLESS_AUDIO_TICK_DEN))
+
+    def _advance_epoch_if_needed(self) -> None:
+        while True:
+            reset = self._epoch_reset_events.get(self._active_epoch_id)
+            if reset is None:
+                return
+            cut_tick_num = max(0, int(reset.cut_tick)) * _HEADLESS_AUDIO_TICK_DEN
+            if self._elapsed_tick_num < cut_tick_num:
+                return
+            self._elapsed_tick_num -= cut_tick_num
+            self._active_epoch_id = int(reset.next_epoch_id)
+
+    def snapshot(self) -> AudioClockSnapshot:
+        self._advance_epoch_if_needed()
+        playhead_tick = self._playhead_tick()
+        safe_start_tick = playhead_tick + self.lead_ticks
+        return AudioClockSnapshot(
+            current_epoch_id=self._active_epoch_id,
+            safe_start_tick=safe_start_tick,
+            fill_until_tick=max(safe_start_tick, playhead_tick + self.horizon_ticks),
+        )
+
+    def sync_to_snapshot(self, clock: AudioClockSnapshot) -> None:
+        self._active_epoch_id = max(0, int(clock.current_epoch_id))
+        playhead_tick = max(0, int(clock.safe_start_tick) - self.lead_ticks)
+        self._elapsed_tick_num = playhead_tick * _HEADLESS_AUDIO_TICK_DEN
+
+    def submit(self, events: tuple[AudioEvent, ...] | list[AudioEvent]) -> None:
+        for raw in events:
+            if not isinstance(raw, AudioResetEvent):
+                continue
+            current = self._epoch_reset_events.get(raw.epoch_id)
+            if current is None or int(raw.cut_tick) < int(current.cut_tick):
+                self._epoch_reset_events[raw.epoch_id] = raw
+
+    def advance_host_frames(self, frames: int) -> None:
+        steps = max(0, int(frames))
+        if steps <= 0:
+            return
+        self._elapsed_tick_num += steps * _HEADLESS_AUDIO_TICK_NUM_PER_HOST_FRAME
+        self._advance_epoch_if_needed()
 
 
 def iter_jsonl_frame_inputs_from_stream(stream: TextIO, *, source: str) -> Iterator[FrameInput]:
@@ -127,6 +229,24 @@ def _delay_after_step_frames(output: StepOutput) -> int:
     return max(0, int(output.timing.delay_after_step_frames))
 
 
+def _normalize_frame_input_audio_clock(
+    frame_input: FrameInput,
+    *,
+    clock_driver: _HeadlessAudioClockDriver,
+) -> FrameInput:
+    raw_clock = frame_input.audio_clock
+    if raw_clock is not None:
+        clock_driver.sync_to_snapshot(raw_clock)
+        effective_clock = raw_clock
+    else:
+        effective_clock = clock_driver.snapshot()
+    return FrameInput(
+        joy_kempston=frame_input.joy_kempston,
+        keyboard_rows=frame_input.keyboard_rows,
+        audio_clock=effective_clock,
+    )
+
+
 def _advance_runtime_host_frame(runtime: FrameStepRuntime) -> None:
     advance = getattr(runtime, "advance_host_frame", None)
     if callable(advance):
@@ -186,6 +306,7 @@ def run_frame_loop(
     iterator = iter(input_frames) if input_frames is not None else None
     frame_idx = 0
     host_frame_index = 0
+    audio_clock_driver = _HeadlessAudioClockDriver()
 
     while True:
         if frames is not None and frame_idx >= frames:
@@ -203,8 +324,14 @@ def run_frame_loop(
                     break
                 frame_input = FrameInput()
 
+        frame_input = _normalize_frame_input_audio_clock(
+            frame_input,
+            clock_driver=audio_clock_driver,
+        )
+
         output = runtime.step(frame_input)
         delay_after_step_frames = _delay_after_step_frames(output)
+        audio_clock_driver.submit(output.audio_events)
 
         if jsonl_output is not None:
             frame_record = {
@@ -214,6 +341,9 @@ def run_frame_loop(
                 "input": {
                     "joy_kempston": frame_input.joy_kempston,
                     "keyboard_rows": list(frame_input.keyboard_rows),
+                    "audio_clock": _audio_clock_to_dict(
+                        frame_input.audio_clock if frame_input.audio_clock is not None else AudioClockSnapshot()
+                    ),
                 },
                 "output": _step_output_to_dict(output),
             }
@@ -223,6 +353,7 @@ def run_frame_loop(
             screen_output.write_frame(output.screen_bitmap, output.screen_attrs)
 
         _apply_post_step_delay(runtime, delay_after_step_frames)
+        audio_clock_driver.advance_host_frames(1 + delay_after_step_frames)
         host_frame_index += 1 + delay_after_step_frames
         frame_idx += 1
 

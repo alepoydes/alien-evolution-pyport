@@ -491,6 +491,7 @@ class AlienEvolutionPort(StatefulManifestRuntime, AlienEvolutionData, ZXSpectrum
         self._fsm_step_active = False
         self._rom_last_key_scan: tuple[int, int] | None = None
         self._level_complete_roll_audio_frame_sync = False
+        self._frame_rom_beeper_cursors: dict[int, int] = {}
         self._stream_lane_ticks = [0, 0, 0]
         self._stream_slot_tick_remainder = 0.0
 
@@ -541,6 +542,9 @@ class AlienEvolutionPort(StatefulManifestRuntime, AlienEvolutionData, ZXSpectrum
 
     def step(self, frame_input: FrameInput) -> StepOutput:
         self.begin_frame(frame_input)
+        self._frame_rom_beeper_cursors = {
+            int(self._audio_emit_epoch_id): self._audio_safe_start_tick_for_epoch(),
+        }
         self._fsm_step_active = True
         try:
             for _ in range(4096):
@@ -714,12 +718,27 @@ class AlienEvolutionPort(StatefulManifestRuntime, AlienEvolutionData, ZXSpectrum
         # Game-level approximation of ROM 0x03B5 call used by this code path.
         period = hl_period & 0xFFFF
         ticks = de_ticks & 0xFFFF
+        emit_epoch = int(self._audio_emit_epoch_id)
+        duration_ticks = self._rom_beeper_duration_ticks(de_ticks=ticks, hl_period=period)
+        if start_tick is None:
+            frame_cursor = self._frame_rom_beeper_cursors.get(emit_epoch)
+            safe_start_tick = self._audio_safe_start_tick_for_epoch(emit_epoch)
+            if frame_cursor is None:
+                start_tick = safe_start_tick
+            else:
+                start_tick = max(int(frame_cursor), safe_start_tick)
+        else:
+            start_tick = max(0, int(start_tick))
         self.emit_rom_beeper(
             period=period,
             ticks=ticks,
             waveform="S",
             source="rom_beeper",
             start_tick=start_tick,
+        )
+        self._frame_rom_beeper_cursors[emit_epoch] = max(
+            int(self._frame_rom_beeper_cursors.get(emit_epoch, 0)),
+            int(start_tick + duration_ticks),
         )
         per_wave_clock_units = 8.0 * (float(period if period > 0 else 1) + 30.125)
         timing_cost = int(round(float(ticks if ticks > 0 else 1) * per_wave_clock_units))
@@ -736,7 +755,7 @@ class AlienEvolutionPort(StatefulManifestRuntime, AlienEvolutionData, ZXSpectrum
         *,
         start_tick: int | None = None,
     ) -> int:
-        cursor_tick = self.current_audio_tick() if start_tick is None else max(0, int(start_tick))
+        cursor_tick = self._audio_safe_start_tick_for_epoch() if start_tick is None else max(0, int(start_tick))
         total_timing_cost = 0
         for de_ticks, hl_period in packets:
             total_timing_cost += self._rom_beeper(
@@ -753,7 +772,7 @@ class AlienEvolutionPort(StatefulManifestRuntime, AlienEvolutionData, ZXSpectrum
         return (frames * _AUDIO_TICKS_PER_SECOND + (_HOST_FRAMES_PER_SECOND // 2)) // _HOST_FRAMES_PER_SECOND
 
     def _queue_teleport_audio_frame_burst(self, *, de_ticks: int, hl_period: int) -> None:
-        start_tick = self.current_audio_tick()
+        start_tick = self._audio_safe_start_tick_for_epoch()
         frame_count = max(1, int(GAMEPLAY_FRAME_DIVIDER))
         period = hl_period & 0xFFFF
         ticks = de_ticks & 0xFFFF
@@ -880,6 +899,27 @@ class AlienEvolutionPort(StatefulManifestRuntime, AlienEvolutionData, ZXSpectrum
         self._stream_lane_ticks[2] = 0
         self._stream_slot_tick_remainder = 0.0
 
+    def _align_stream_audio_lanes_to_safe_start_tick(self) -> None:
+        self._ensure_stream_lane_slots()
+        anchor_tick = self._audio_safe_start_tick_for_epoch()
+        self._stream_lane_ticks[0] = max(int(self._stream_lane_ticks[0]), anchor_tick)
+        self._stream_lane_ticks[1] = max(int(self._stream_lane_ticks[1]), anchor_tick)
+        self._stream_lane_ticks[2] = max(int(self._stream_lane_ticks[2]), anchor_tick)
+
+    def _stream_audio_frontier_tick(self) -> int:
+        self._ensure_stream_lane_slots()
+        return max(int(self._stream_lane_ticks[0]), int(self._stream_lane_ticks[1]), int(self._stream_lane_ticks[2]))
+
+    def _fill_stream_audio_until_target(self) -> None:
+        self._align_stream_audio_lanes_to_safe_start_tick()
+        target_tick = self._audio_fill_until_tick_for_epoch()
+        while self._stream_audio_frontier_tick() < target_tick:
+            frontier_before = self._stream_audio_frontier_tick()
+            timing_cost = self.core_command_interpreter_scenario_stream_engine()
+            frontier_after = self._stream_audio_frontier_tick()
+            if frontier_after <= frontier_before and int(timing_cost) <= 0:
+                raise RuntimeError("Stream audio fill made no progress")
+
     def _ensure_stream_lane_slots(self) -> None:
         value = self._stream_lane_ticks
         if not isinstance(value, list):
@@ -901,7 +941,7 @@ class AlienEvolutionPort(StatefulManifestRuntime, AlienEvolutionData, ZXSpectrum
     def _queue_mode_audio_reset(self) -> int:
         cut_tick = self.audio_epoch_tail()
         if cut_tick <= 0:
-            cut_tick = self.current_audio_tick()
+            cut_tick = self._audio_safe_start_tick_for_epoch()
         return self.schedule_reset(cut_tick)
 
     def _fsm_start_stream(
@@ -922,7 +962,6 @@ class AlienEvolutionPort(StatefulManifestRuntime, AlienEvolutionData, ZXSpectrum
         self._reset_stream_audio_timing_state()
         self._fsm_stream_ctx = {
             "abort_on_keypress": bool(abort_on_keypress),
-            "timing_debt": 0,
             "return_state": return_state,
         }
         self._interrupts_enabled = False
@@ -935,6 +974,7 @@ class AlienEvolutionPort(StatefulManifestRuntime, AlienEvolutionData, ZXSpectrum
             raise RuntimeError("FSM stream finish requires return_state in context")
         if not isinstance(ctx["return_state"], str):
             raise RuntimeError("FSM stream finish requires string return_state")
+        self.schedule_reset(self._audio_safe_start_tick_for_epoch())
         return_state = ctx["return_state"]
         self._reset_stream_audio_timing_state()
         self._interrupts_enabled = True
@@ -960,20 +1000,15 @@ class AlienEvolutionPort(StatefulManifestRuntime, AlienEvolutionData, ZXSpectrum
             raise RuntimeError("FSM stream state requires non-empty _fsm_stream_ctx")
         if "return_state" not in ctx:
             raise RuntimeError("FSM stream state requires return_state in context")
-        if "timing_debt" not in ctx:
-            raise RuntimeError("FSM stream state requires timing_debt in context")
         if "abort_on_keypress" not in ctx:
             raise RuntimeError("FSM stream state requires abort_on_keypress in context")
         if not isinstance(ctx["abort_on_keypress"], bool):
             raise RuntimeError("FSM stream state requires bool abort_on_keypress")
 
-        timing_debt = int(ctx["timing_debt"])
-        if timing_debt <= 0:
-            try:
-                timing_cost = self.core_command_interpreter_scenario_stream_engine()
-            except ForcedInterpreterAbort:
-                return self._fsm_finish_stream(), None
-            timing_debt += max(1, int(timing_cost))
+        try:
+            self._fill_stream_audio_until_target()
+        except ForcedInterpreterAbort:
+            return self._fsm_finish_stream(), None
 
         key_code = self._rom_keyboard_input_poll_028e()
         if bool(ctx["abort_on_keypress"]) and ((key_code + 0x01) & 0xFF) != 0x00:
@@ -985,8 +1020,6 @@ class AlienEvolutionPort(StatefulManifestRuntime, AlienEvolutionData, ZXSpectrum
                 return FSM_STATE_WAIT_KEYBOARD_RELEASE_FRAME, 1
             return next_state, None
 
-        timing_debt -= STREAM_ENGINE_FRAME_BUDGET
-        ctx["timing_debt"] = timing_debt
         return FSM_STATE_STREAM_INTERMISSION_FRAME, 1
 
     def _fsm_state_menu_idle_poll_frame(self) -> tuple[str, int | None]:
@@ -5884,20 +5917,18 @@ class AlienEvolutionPort(StatefulManifestRuntime, AlienEvolutionData, ZXSpectrum
 
         self._interrupts_enabled = False
         try:
-            timing_debt = 0
             while True:
-                if timing_debt <= 0:
-                    try:
-                        timing_cost = self.core_command_interpreter_scenario_stream_engine()
-                    except ForcedInterpreterAbort:
-                        return
-                    timing_debt += max(1, int(timing_cost))
+                try:
+                    self._fill_stream_audio_until_target()
+                except ForcedInterpreterAbort:
+                    self.schedule_reset(self._audio_safe_start_tick_for_epoch())
+                    return
 
                 key_code = self._rom_keyboard_input_poll_028e()
                 if abort_on_keypress and ((key_code + 0x01) & 0xFF) != 0x00:
+                    self.schedule_reset(self._audio_safe_start_tick_for_epoch())
                     return
 
-                timing_debt -= STREAM_ENGINE_FRAME_BUDGET
                 self._yield_frame()
         finally:
             self._reset_stream_audio_timing_state()
@@ -5961,6 +5992,7 @@ class AlienEvolutionPort(StatefulManifestRuntime, AlienEvolutionData, ZXSpectrum
 
     # ZX 0xFC13..0xFC6F
     def core_command_interpreter_scenario_stream_engine(self) -> int:
+        self._align_stream_audio_lanes_to_safe_start_tick()
         cmd1 = self.fn_stream_byte_fetch_helper(stream_slot="stream_ptr_a")
         self.var_stream_cmd_byte_0 = cmd1 & 0xFF
 

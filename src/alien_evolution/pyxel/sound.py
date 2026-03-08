@@ -11,6 +11,7 @@ _AUDIO_WAVEFORMS = ("S", "T", "P", "N")
 _A2_REFERENCE_HZ = 429.89
 _PYXEL_SOUND_SPEED_MAX = 255
 _SCHEDULE_HORIZON_TICKS: Final[int] = 96
+_SAFE_START_LEAD_TICKS: Final[int] = 3
 
 
 @dataclass(frozen=True, slots=True)
@@ -180,7 +181,11 @@ def beep(
 
 
 class PyxelAudioPlayer:
-    """Monotonic wall-clock audio scheduler backed by four equal Pyxel channels."""
+    """Monotonic wall-clock audio scheduler backed by four equal Pyxel channels.
+
+    The backend owns real time and the private playhead. Runtime-facing callers
+    only receive future-safe scheduling pointers via `clock_snapshot()`.
+    """
 
     def __init__(
         self,
@@ -252,6 +257,13 @@ class PyxelAudioPlayer:
     def _note_end_tick(note: _QueuedNote) -> int:
         return int(note.event.start_tick) + int(note.event.duration_ticks)
 
+    def _effective_note_end_tick(self, note: _QueuedNote) -> int:
+        limit = self._note_end_tick(note)
+        reset = self._epoch_reset_events.get(note.event.epoch_id)
+        if reset is not None:
+            limit = min(limit, int(reset.cut_tick))
+        return limit
+
     @staticmethod
     def _effective_note_start_tick(note: _QueuedNote) -> int:
         return max(int(note.event.start_tick), int(note.available_from_tick))
@@ -265,7 +277,7 @@ class PyxelAudioPlayer:
             return
         if note.available_from_tick <= note.event.start_tick:
             return
-        note_end_tick = self._note_end_tick(note)
+        note_end_tick = self._effective_note_end_tick(note)
         if note.available_from_tick >= note_end_tick:
             self._fully_missed_events += 1
             self._fully_missed_ticks += max(0, note_end_tick - int(note.event.start_tick))
@@ -287,13 +299,13 @@ class PyxelAudioPlayer:
         notes = [
             note
             for note in self._epoch_note_events.get(epoch_id, [])
-            if self._effective_note_start_tick(note) < end_tick and self._note_end_tick(note) > start_tick
+            if self._effective_note_start_tick(note) < end_tick and self._effective_note_end_tick(note) > start_tick
         ]
         for tick in range(start_tick, end_tick):
             active = [
                 note
                 for note in notes
-                if self._effective_note_start_tick(note) <= tick < self._note_end_tick(note)
+                if self._effective_note_start_tick(note) <= tick < self._effective_note_end_tick(note)
             ]
             active.sort(key=self._selection_sort_key)
             if len(active) <= 4:
@@ -330,9 +342,12 @@ class PyxelAudioPlayer:
     def clock_snapshot(self, now_s: float | None = None) -> AudioClockSnapshot:
         now = time.perf_counter() if now_s is None else float(now_s)
         self._advance_epoch_if_needed(now)
+        playhead_tick = self._epoch_playhead_tick(now)
+        safe_start_tick = playhead_tick + _SAFE_START_LEAD_TICKS
         return AudioClockSnapshot(
             current_epoch_id=self._active_epoch_id,
-            current_tick=self._epoch_playhead_tick(now),
+            safe_start_tick=safe_start_tick,
+            fill_until_tick=max(safe_start_tick, playhead_tick + self._horizon_ticks),
         )
 
     def submit(self, events: tuple[AudioEvent, ...] | list[AudioEvent], now_s: float | None = None) -> None:
@@ -372,7 +387,7 @@ class PyxelAudioPlayer:
         return [
             note
             for note in self._epoch_note_events.get(self._active_epoch_id, [])
-            if self._effective_note_start_tick(note) < cut_tick and self._note_end_tick(note) > playhead_tick
+            if self._effective_note_start_tick(note) < cut_tick and self._effective_note_end_tick(note) > playhead_tick
         ]
 
     def _build_tick_assignments(
@@ -389,7 +404,7 @@ class PyxelAudioPlayer:
             selected = [
                 note
                 for note in active_notes
-                if self._effective_note_start_tick(note) <= tick < self._note_end_tick(note)
+                if self._effective_note_start_tick(note) <= tick < self._effective_note_end_tick(note)
             ]
             selected.sort(key=self._selection_sort_key)
             selected = selected[:4]
@@ -414,11 +429,7 @@ class PyxelAudioPlayer:
         return assignments
 
     def _remaining_tick_limit(self, note: _QueuedNote) -> int:
-        limit = self._note_end_tick(note)
-        reset = self._epoch_reset_events.get(note.event.epoch_id)
-        if reset is not None:
-            limit = min(limit, int(reset.cut_tick))
-        return limit
+        return self._effective_note_end_tick(note)
 
     def _compress_channel_segments(
         self,
