@@ -484,10 +484,12 @@ class PyxelAudioPlayer:
                 )
             idx = run_end
 
-        compact = tuple(segment for segment in segments if segment.ticks > 0)
-        if compact and all(segment.is_rest for segment in compact):
+        compact = [segment for segment in segments if segment.ticks > 0]
+        while compact and compact[-1].is_rest:
+            compact.pop()
+        if not compact:
             return ()
-        return compact
+        return tuple(compact)
 
     def _trim_plan(
         self,

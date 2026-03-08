@@ -490,6 +490,34 @@ class PyxelSoundTimelineTests(unittest.TestCase):
         set_calls = [call for sound in fake_pyxel.sounds for call in sound.calls if call.get("notes") != "R"]
         self.assertTrue(any(call.get("speed") == 4 for call in set_calls))
 
+    def test_future_short_event_does_not_restart_each_frame_before_onset(self) -> None:
+        fake_pyxel = _FakePyxel()
+        player = PyxelAudioPlayer()
+        player._epoch_origin_time_s = 10.0
+        player.submit(
+            (
+                AudioNoteEvent(
+                    epoch_id=0,
+                    start_tick=3,
+                    duration_ticks=2,
+                    waveform="S",
+                    freq_hz=440.0,
+                    volume=5,
+                    source="generic",
+                    priority=25,
+                ),
+            ),
+            now_s=10.0,
+        )
+
+        with patch.dict(sys.modules, {"pyxel": fake_pyxel}):
+            player.update(now_s=10.0)
+            player.update(now_s=10.0167)
+            player.update(now_s=10.0334)
+
+        self.assertEqual(fake_pyxel.stop_calls, [])
+        self.assertEqual(len(fake_pyxel.play_calls), 1)
+
     def test_saturation_loss_counters_track_overflowed_fifth_voice(self) -> None:
         fake_pyxel = _FakePyxel()
         player = PyxelAudioPlayer()
