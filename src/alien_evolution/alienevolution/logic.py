@@ -1420,10 +1420,6 @@ class AlienEvolutionPort(StatefulManifestRuntime, AlienEvolutionData, ZXSpectrum
             raise RuntimeError("FSM scheduler-autonomous state requires pending_autonomous in _fsm_tick_ctx")
         if not isinstance(tick_ctx["pending_autonomous"], bool):
             raise RuntimeError("FSM scheduler-autonomous state requires bool pending_autonomous")
-        if not tick_ctx["pending_autonomous"]:
-            raise RuntimeError(
-                "FSM scheduler-autonomous state requires pending_autonomous=True in _fsm_tick_ctx",
-            )
         if "scheduler_phase" not in tick_ctx:
             raise RuntimeError("FSM scheduler-autonomous state requires scheduler_phase in _fsm_tick_ctx")
         if not isinstance(tick_ctx["scheduler_phase"], str):
@@ -1432,23 +1428,38 @@ class AlienEvolutionPort(StatefulManifestRuntime, AlienEvolutionData, ZXSpectrum
         if not isinstance(scheduler_return_state, str):
             raise RuntimeError("FSM scheduler-autonomous state requires scheduler_return_state to be string")
         phase = tick_ctx["scheduler_phase"]
+        pending_autonomous = tick_ctx["pending_autonomous"]
+        if phase != "after_tick1" and not pending_autonomous:
+            raise RuntimeError(
+                "FSM scheduler-autonomous state requires pending_autonomous=True in _fsm_tick_ctx",
+            )
         if phase == "tick0":
             tick_ctx["scheduler_phase"] = "after_tick0"
             tick_ctx["tick_stage3_next_state"] = FSM_STATE_SCHEDULER_AUTONOMOUS_FRAME
             return FSM_STATE_GAMEPLAY_TICK_STAGE_0_FRAME, None
-        if phase != "after_tick0":
+        if phase == "after_tick0":
+            if "pending_marker" not in tick_ctx:
+                raise RuntimeError("FSM scheduler-autonomous state requires pending_marker in _fsm_tick_ctx")
+            if not isinstance(tick_ctx["pending_marker"], bool):
+                raise RuntimeError("FSM scheduler-autonomous state requires bool pending_marker")
+            pending_marker = tick_ctx["pending_marker"]
+            self._autonomous_expansion_build_and_swap()
+            tick_ctx["pending_autonomous"] = False
+            tick_ctx["pending_marker"] = False
+            tick_ctx["scheduler_pending_marker_seed"] = pending_marker
+            tick_ctx["scheduler_phase"] = "after_tick1"
+            tick_ctx["tick_stage3_next_state"] = FSM_STATE_SCHEDULER_AUTONOMOUS_FRAME
+            return FSM_STATE_GAMEPLAY_TICK_STAGE_0_FRAME, None
+        if phase != "after_tick1":
             raise RuntimeError(f"Unknown scheduler autonomous phase: {phase!r}")
 
-        if "pending_marker" not in tick_ctx:
-            raise RuntimeError("FSM scheduler-autonomous state requires pending_marker in _fsm_tick_ctx")
-        if not isinstance(tick_ctx["pending_marker"], bool):
-            raise RuntimeError("FSM scheduler-autonomous state requires bool pending_marker")
-        pending_marker = tick_ctx["pending_marker"]
-        tick_ctx["pending_autonomous"] = False
-        tick_ctx["pending_marker"] = False
+        pending_marker = tick_ctx.pop("scheduler_pending_marker_seed", False)
+        if not isinstance(pending_marker, bool):
+            raise RuntimeError("FSM scheduler-autonomous state requires bool scheduler_pending_marker_seed")
+        self._autonomous_expansion_finalize_retag()
+        self._scheduler_triggered_autonomous_housekeeping()
         tick_ctx["scheduler_phase"] = "tick0"
         tick_ctx.pop("scheduler_return_state", None)
-        self.scheduler_triggered_autonomous_step(run_tick=False)
         if pending_marker:
             self.scheduler_triggered_marker_seeding()
         return scheduler_return_state, None
@@ -1561,6 +1572,7 @@ class AlienEvolutionPort(StatefulManifestRuntime, AlienEvolutionData, ZXSpectrum
             tick_ctx["pending_autonomous"] = False
             tick_ctx["pending_marker"] = False
             tick_ctx.pop("scheduler_phase", None)
+            tick_ctx.pop("scheduler_pending_marker_seed", None)
             tick_ctx.pop("scheduler_return_state", None)
             tick_ctx.pop("tick_stage_phase", None)
             tick_ctx.pop("tick_stage_id", None)
@@ -4437,6 +4449,12 @@ class AlienEvolutionPort(StatefulManifestRuntime, AlienEvolutionData, ZXSpectrum
     def autonomous_expansion_pass(self, *, run_tick: bool = True):
         if run_tick:
             self.fn_main_gameplay_tick_updater()
+        self._autonomous_expansion_build_and_swap()
+        if run_tick:
+            self.fn_main_gameplay_tick_updater()
+        self._autonomous_expansion_finalize_retag()
+
+    def _autonomous_expansion_build_and_swap(self) -> None:
         queue_src = self.var_runtime_queue_head_3
         queue_dst = self.var_runtime_queue_head_4
         src_index = 0x00
@@ -4447,11 +4465,10 @@ class AlienEvolutionPort(StatefulManifestRuntime, AlienEvolutionData, ZXSpectrum
                 raise ValueError("Runtime object queue source exhausted before sentinel")
             a_state = queue_src.entries[src_index].state & 0xFF
             if a_state == 0xFF:
-                self.expansion_commit(
+                self._autonomous_expansion_commit_swap(
                     queue_dst=queue_dst,
                     write_index=dst_index,
                     A_term=a_state,
-                    run_tick=run_tick,
                 )
                 return
             if a_state == 0x00:
@@ -4567,6 +4584,22 @@ class AlienEvolutionPort(StatefulManifestRuntime, AlienEvolutionData, ZXSpectrum
         *,
         run_tick: bool = True,
     ) -> None:
+        self._autonomous_expansion_commit_swap(
+            queue_dst=queue_dst,
+            write_index=write_index,
+            A_term=A_term,
+        )
+        if run_tick:
+            self.fn_main_gameplay_tick_updater()
+        self._autonomous_expansion_finalize_retag()
+
+    def _autonomous_expansion_commit_swap(
+        self,
+        *,
+        queue_dst: RuntimeObjectQueueBuffer,
+        write_index: int,
+        A_term: int,
+    ) -> None:
         if not (0 <= write_index < len(queue_dst.entries)):
             raise ValueError(f"Runtime queue write index out of range: {write_index}")
         term_entry = queue_dst.entries[write_index]
@@ -4587,9 +4620,7 @@ class AlienEvolutionPort(StatefulManifestRuntime, AlienEvolutionData, ZXSpectrum
         self.var_runtime_queue_head_3 = de_q2
         self.var_runtime_queue_head_4 = hl_q3
 
-        if run_tick:
-            self.fn_main_gameplay_tick_updater()
-
+    def _autonomous_expansion_finalize_retag(self) -> None:
         self.fn_queue_retag_helper_one_list(
             HL_queue=self.var_runtime_queue_head_0,
             E_code=0x19,
@@ -5117,6 +5148,9 @@ class AlienEvolutionPort(StatefulManifestRuntime, AlienEvolutionData, ZXSpectrum
     # ZX 0xF0C5..0xF0EC
     def scheduler_triggered_autonomous_step(self, *, run_tick: bool = True):
         self.autonomous_expansion_pass(run_tick=run_tick)
+        self._scheduler_triggered_autonomous_housekeeping()
+
+    def _scheduler_triggered_autonomous_housekeeping(self) -> None:
         if (self.var_runtime_progress_byte_2 & 0xFF) != 0x00:
             E_bias = 0x0A
         else:

@@ -8,6 +8,7 @@ from alien_evolution.alienevolution.logic import (
     FSM_STATE_FAILURE_TIMER_DRAIN_FRAME,
     FSM_STATE_FRAME_DELAY_0X50_FRAME,
     FSM_STATE_GAMEPLAY_BRANCH,
+    FSM_STATE_GAMEPLAY_MAIN_FRAME,
     FSM_STATE_GAMEPLAY_MAIN_POST_TICK,
     FSM_STATE_GAMEPLAY_MAIN_AFTER_CALLBACK,
     FSM_STATE_GAMEPLAY_TICK_STAGE_1_FRAME,
@@ -107,6 +108,45 @@ class RuntimeFramePacingTests(unittest.TestCase):
 
         self.assertEqual(next_state, FSM_STATE_GAMEPLAY_TICK_STAGE_1_FRAME)
         self.assertEqual(delay, max(1, int(GAMEPLAY_FRAME_DIVIDER)))
+
+    def test_scheduler_autonomous_branch_keeps_nine_gameplay_delays(self) -> None:
+        runtime = AlienEvolutionPort()
+        runtime._fsm_state = FSM_STATE_GAMEPLAY_MAIN_FRAME
+        runtime._fsm_gameplay_ctx["initialized"] = True
+        runtime._fsm_tick_ctx = {
+            "pending_autonomous": False,
+            "pending_marker": False,
+        }
+        runtime.var_runtime_scheduler_timer = 0x0101
+        runtime.patch_scheduler_script_base_ptr = 0
+        runtime.const_periodic_scheduler_script[0] = 0x01
+        runtime.var_runtime_objective_counter = 0x06
+        runtime.var_runtime_progress_byte_0 = 0x01
+        runtime.var_runtime_progress_byte_1 = 0x01
+        runtime.var_runtime_progress_byte_2 = 0x01
+        runtime.per_frame_object_state_update_pass = lambda: None  # type: ignore[assignment]
+        runtime.fn_process_transient_effect_queues_handlers_xe530 = lambda: None  # type: ignore[assignment]
+        runtime.fn_gameplay_movement_control_step = lambda: None  # type: ignore[assignment]
+        runtime.fn_directional_interaction_dispatcher_using_pointer_table = (  # type: ignore[assignment]
+            lambda *, defer_overlay_timing_to_fsm=False: None
+        )
+        runtime.fn_patchable_callback_hook_frame_loop = (  # type: ignore[assignment]
+            lambda *, defer_halt_to_fsm=False, defer_timing_to_fsm=False: (0, 0)
+        )
+        runtime.scheduler_triggered_autonomous_step = lambda *, run_tick=True: None  # type: ignore[assignment]
+        runtime.scheduler_triggered_marker_seeding = lambda: None  # type: ignore[assignment]
+        runtime.fn_main_pseudo_3d_map_render_pipeline = lambda: None  # type: ignore[assignment]
+
+        delays: list[int] = []
+        for _ in range(9):
+            output = runtime.step(self._NEUTRAL_INPUT)
+            delays.append(int(output.timing.delay_after_step_frames))
+
+        self.assertEqual(runtime._fsm_state, FSM_STATE_GAMEPLAY_BRANCH)
+        self.assertEqual(
+            delays,
+            [max(1, int(GAMEPLAY_FRAME_DIVIDER)) - 1] * 9,
+        )
 
     def test_callback_halt_state_ticks_once_per_host_frame(self) -> None:
         runtime = AlienEvolutionPort()

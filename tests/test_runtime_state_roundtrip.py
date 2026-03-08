@@ -19,6 +19,7 @@ from alien_evolution.alienevolution.logic import (
     FSM_STATE_OVERLAY_PRE_FILL_FRAME,
     FSM_STATE_GAMEPLAY_TICK_STAGE_0_FRAME,
     FSM_STATE_GAMEPLAY_TICK_STAGE_1_FRAME,
+    FSM_STATE_GAMEPLAY_TICK_STAGE_2_FRAME,
     FSM_STATE_GAMEPLAY_TICK_STAGE_3_FRAME,
     FSM_STATE_GAMEPLAY_SETUP,
     FSM_STATE_SCHEDULER_AUTONOMOUS_FRAME,
@@ -284,7 +285,7 @@ class RuntimeStateRoundtripTests(unittest.TestCase):
             FSM_STATE_SCHEDULER_AUTONOMOUS_FRAME,
         )
 
-    def test_scheduler_autonomous_state_after_tick_clears_pending_flags(self) -> None:
+    def test_scheduler_autonomous_state_after_first_tick_chain_starts_second_chain(self) -> None:
         runtime = AlienEvolutionPort()
         runtime._fsm_state = FSM_STATE_SCHEDULER_AUTONOMOUS_FRAME
         runtime._fsm_tick_ctx = {
@@ -292,40 +293,159 @@ class RuntimeStateRoundtripTests(unittest.TestCase):
             "pending_marker": False,
             "scheduler_phase": "after_tick0",
         }
-        observed: dict[str, object] = {}
+        observed: dict[str, int] = {"build_and_swap_calls": 0}
 
-        def _scheduler_step(*, run_tick: bool = True) -> None:
-            observed["run_tick"] = run_tick
+        def _build_and_swap() -> None:
+            observed["build_and_swap_calls"] += 1
 
-        runtime.scheduler_triggered_autonomous_step = _scheduler_step  # type: ignore[assignment]
-        runtime.scheduler_triggered_marker_seeding = lambda: None  # type: ignore[assignment]
+        runtime._autonomous_expansion_build_and_swap = _build_and_swap  # type: ignore[assignment]
 
         next_state, delay = runtime._fsm_state_scheduler_autonomous_frame()
 
-        self.assertEqual(next_state, FSM_STATE_GAMEPLAY_MAIN_POST_TICK)
+        self.assertEqual(next_state, FSM_STATE_GAMEPLAY_TICK_STAGE_0_FRAME)
         self.assertIsNone(delay)
-        self.assertEqual(observed.get("run_tick"), False)
+        self.assertEqual(observed.get("build_and_swap_calls"), 1)
         self.assertFalse(runtime._fsm_tick_ctx.get("pending_autonomous", True))
-        self.assertEqual(runtime._fsm_tick_ctx.get("scheduler_phase"), "tick0")
+        self.assertFalse(runtime._fsm_tick_ctx.get("pending_marker", True))
+        self.assertEqual(runtime._fsm_tick_ctx.get("scheduler_phase"), "after_tick1")
+        self.assertEqual(runtime._fsm_tick_ctx.get("scheduler_pending_marker_seed"), False)
+        self.assertEqual(
+            runtime._fsm_tick_ctx.get("tick_stage3_next_state"),
+            FSM_STATE_SCHEDULER_AUTONOMOUS_FRAME,
+        )
 
-    def test_scheduler_autonomous_state_after_tick_uses_configured_return_state(self) -> None:
+    def test_scheduler_autonomous_state_after_second_tick_chain_uses_configured_return_state(self) -> None:
         runtime = AlienEvolutionPort()
         runtime._fsm_state = FSM_STATE_SCHEDULER_AUTONOMOUS_FRAME
         runtime._fsm_tick_ctx = {
-            "pending_autonomous": True,
+            "pending_autonomous": False,
             "pending_marker": False,
-            "scheduler_phase": "after_tick0",
+            "scheduler_phase": "after_tick1",
             "scheduler_return_state": FSM_STATE_TRANSITION_DISPATCH,
+            "scheduler_pending_marker_seed": True,
         }
+        observed: list[str] = []
 
-        runtime.scheduler_triggered_autonomous_step = lambda *, run_tick=True: None  # type: ignore[assignment]
-        runtime.scheduler_triggered_marker_seeding = lambda: None  # type: ignore[assignment]
+        runtime._autonomous_expansion_finalize_retag = lambda: observed.append("finalize")  # type: ignore[assignment]
+        runtime._scheduler_triggered_autonomous_housekeeping = lambda: observed.append("housekeeping")  # type: ignore[assignment]
+        runtime.scheduler_triggered_marker_seeding = lambda: observed.append("marker")  # type: ignore[assignment]
 
         next_state, delay = runtime._fsm_state_scheduler_autonomous_frame()
 
         self.assertEqual(next_state, FSM_STATE_TRANSITION_DISPATCH)
         self.assertIsNone(delay)
+        self.assertEqual(observed, ["finalize", "housekeeping", "marker"])
         self.assertNotIn("scheduler_return_state", runtime._fsm_tick_ctx)
+        self.assertNotIn("scheduler_pending_marker_seed", runtime._fsm_tick_ctx)
+        self.assertEqual(runtime._fsm_tick_ctx.get("scheduler_phase"), "tick0")
+
+    def test_scheduler_autonomous_deferred_path_keeps_swap_before_final_retag(self) -> None:
+        runtime = AlienEvolutionPort()
+        active_map = runtime.var_level_map_mode_0
+        q0_index = 0x0064
+        q1_index = 0x0096
+        q2_index = 0x00C8
+        seed_index = 0x01F4
+        current_index = 0x0300
+
+        active_map[q0_index] = 0x19
+        active_map[q1_index] = 0x11
+        active_map[q2_index] = 0x0D
+        active_map[seed_index] = 0x01
+        active_map[seed_index + 0x0001] = 0x00
+        active_map[seed_index - 0x0001] = 0x00
+        active_map[seed_index - 0x0032] = 0x00
+        active_map[seed_index + 0x0032] = 0x00
+        active_map[current_index] = 0x21
+
+        runtime.var_runtime_object_queue_0.entries[0].state = 0x01
+        runtime.var_runtime_object_queue_0.entries[0].cell_ptr = BlockPtr(active_map, q0_index)
+        runtime.var_runtime_object_queue_0.entries[1].state = 0xFF
+        runtime.var_runtime_object_queue_0.entries[1].cell_ptr = None
+        runtime.var_runtime_object_queue_1.entries[0].state = 0x01
+        runtime.var_runtime_object_queue_1.entries[0].cell_ptr = BlockPtr(active_map, q1_index)
+        runtime.var_runtime_object_queue_1.entries[1].state = 0xFF
+        runtime.var_runtime_object_queue_1.entries[1].cell_ptr = None
+        runtime.var_runtime_object_queue_2.entries[0].state = 0x01
+        runtime.var_runtime_object_queue_2.entries[0].cell_ptr = BlockPtr(active_map, q2_index)
+        runtime.var_runtime_object_queue_2.entries[1].state = 0xFF
+        runtime.var_runtime_object_queue_2.entries[1].cell_ptr = None
+        runtime.var_runtime_object_queue_3.entries[0].state = 0x01
+        runtime.var_runtime_object_queue_3.entries[0].cell_ptr = BlockPtr(active_map, seed_index)
+        runtime.var_runtime_object_queue_3.entries[1].state = 0xFF
+        runtime.var_runtime_object_queue_3.entries[1].cell_ptr = None
+        runtime.var_runtime_object_queue_4.entries[0].state = 0xFF
+        runtime.var_runtime_object_queue_4.entries[0].cell_ptr = None
+
+        runtime.var_runtime_queue_head_0 = runtime.var_runtime_object_queue_0
+        runtime.var_runtime_queue_head_1 = runtime.var_runtime_object_queue_1
+        runtime.var_runtime_queue_head_2 = runtime.var_runtime_object_queue_2
+        runtime.var_runtime_queue_head_3 = runtime.var_runtime_object_queue_3
+        runtime.var_runtime_queue_head_4 = runtime.var_runtime_object_queue_4
+        runtime.var_runtime_current_cell_ptr = BlockPtr(active_map, current_index)
+        runtime.var_runtime_progress_byte_0 = 0x01
+        runtime.var_runtime_progress_byte_1 = 0x00
+        runtime.var_runtime_progress_byte_2 = 0x00
+
+        runtime.fn_gameplay_movement_control_step = lambda: None  # type: ignore[assignment]
+        runtime.fn_process_transient_effect_queues_handlers_xe530 = lambda: None  # type: ignore[assignment]
+        runtime.fn_patchable_callback_hook_frame_loop = (  # type: ignore[assignment]
+            lambda *, defer_halt_to_fsm=False, defer_timing_to_fsm=False: (0, 0)
+        )
+        runtime.fn_directional_interaction_dispatcher_using_pointer_table = (  # type: ignore[assignment]
+            lambda *, defer_overlay_timing_to_fsm=False: None
+        )
+        runtime.fn_active_transient_effect_executor = lambda: None  # type: ignore[assignment]
+        runtime.fn_main_pseudo_3d_map_render_pipeline = lambda: None  # type: ignore[assignment]
+        runtime.fn_hud_triplet_increment_helper_bytes_xa8d8 = lambda: None  # type: ignore[assignment]
+        runtime.fn_hud_triplet_decrement_helper_bytes_xa8d8 = lambda: None  # type: ignore[assignment]
+        runtime.fn_counter_rebalance_helper = lambda queue_state, E_bias: None  # type: ignore[assignment]
+        runtime.fn_rebuild_hud_meter_bars_counters_xa8c4 = lambda: None  # type: ignore[assignment]
+        runtime._rom_beeper = lambda *args, **kwargs: 0  # type: ignore[assignment]
+
+        runtime._fsm_tick_ctx = {
+            "pending_autonomous": True,
+            "pending_marker": False,
+            "scheduler_phase": "tick0",
+        }
+
+        next_state, delay = runtime._fsm_state_scheduler_autonomous_frame()
+        self.assertEqual(next_state, FSM_STATE_GAMEPLAY_TICK_STAGE_0_FRAME)
+        self.assertIsNone(delay)
+
+        next_state, delay = runtime._fsm_state_gameplay_tick_stage_0_frame()
+        self.assertEqual(next_state, FSM_STATE_GAMEPLAY_TICK_STAGE_1_FRAME)
+        self.assertEqual(delay, max(1, int(GAMEPLAY_FRAME_DIVIDER)))
+        next_state, delay = runtime._fsm_state_gameplay_tick_stage_1_frame()
+        self.assertEqual(next_state, FSM_STATE_GAMEPLAY_TICK_STAGE_2_FRAME)
+        self.assertEqual(delay, max(1, int(GAMEPLAY_FRAME_DIVIDER)))
+        next_state, delay = runtime._fsm_state_gameplay_tick_stage_2_frame()
+        self.assertEqual(next_state, FSM_STATE_GAMEPLAY_TICK_STAGE_3_FRAME)
+        self.assertEqual(delay, max(1, int(GAMEPLAY_FRAME_DIVIDER)))
+        next_state, delay = runtime._fsm_state_gameplay_tick_stage_3_frame()
+        self.assertEqual(next_state, FSM_STATE_SCHEDULER_AUTONOMOUS_FRAME)
+        self.assertEqual(delay, max(1, int(GAMEPLAY_FRAME_DIVIDER)))
+
+        self.assertEqual(active_map[q0_index] & 0x3F, 0x29)
+
+        next_state, delay = runtime._fsm_state_scheduler_autonomous_frame()
+        self.assertEqual(next_state, FSM_STATE_GAMEPLAY_TICK_STAGE_0_FRAME)
+        self.assertIsNone(delay)
+        self.assertIs(runtime.var_runtime_queue_head_0, runtime.var_runtime_object_queue_4)
+        self.assertEqual(active_map[q0_index] & 0x3F, 0x29)
+        self.assertEqual(active_map[seed_index] & 0x3F, 0x19)
+
+        runtime._fsm_state_gameplay_tick_stage_0_frame()
+        runtime._fsm_state_gameplay_tick_stage_1_frame()
+        runtime._fsm_state_gameplay_tick_stage_2_frame()
+        next_state, delay = runtime._fsm_state_gameplay_tick_stage_3_frame()
+        self.assertEqual(next_state, FSM_STATE_SCHEDULER_AUTONOMOUS_FRAME)
+        self.assertEqual(delay, max(1, int(GAMEPLAY_FRAME_DIVIDER)))
+
+        next_state, delay = runtime._fsm_state_scheduler_autonomous_frame()
+        self.assertEqual(next_state, FSM_STATE_GAMEPLAY_MAIN_POST_TICK)
+        self.assertIsNone(delay)
+        self.assertEqual(active_map[q0_index] & 0x3F, 0x11)
 
     def test_scheduler_autonomous_state_fails_fast_without_phase(self) -> None:
         runtime = AlienEvolutionPort()
@@ -1108,6 +1228,7 @@ class RuntimeStateRoundtripTests(unittest.TestCase):
         self.assertFalse(runtime._fsm_tick_ctx["pending_autonomous"])
         self.assertFalse(runtime._fsm_tick_ctx["pending_marker"])
         self.assertNotIn("scheduler_phase", runtime._fsm_tick_ctx)
+        self.assertNotIn("scheduler_pending_marker_seed", runtime._fsm_tick_ctx)
         self.assertNotIn("scheduler_return_state", runtime._fsm_tick_ctx)
         self.assertNotIn("tick_stage_phase", runtime._fsm_tick_ctx)
         self.assertNotIn("tick_stage_id", runtime._fsm_tick_ctx)
