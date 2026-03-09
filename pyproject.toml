@@ -3,13 +3,13 @@ requires = ["hatchling>=1.21"]
 build-backend = "hatchling.build"
 
 [project]
-name = "alien-evolution-pyxel-port"
+name = "alien-evolution-pyport"
 version = "0.1.0"
-description = "Scaffold for a pixel-perfect ZX Spectrum Alien Evolution logic port on Pyxel"
+description = "Fidelity-first Python/Pyxel port of the 1987 ZX Spectrum game Alien Evolution"
+authors = [{ name = "Igor Lobanov" }]
+license = { file = "LICENSE" }
 readme = "README.md"
 requires-python = ">=3.10"
-authors = [{ name = "Alien Evolution port scaffold" }]
-license = { text = "MIT" }
 keywords = ["zx-spectrum", "pyxel", "retro", "port"]
 
 dependencies = [
@@ -17,7 +17,10 @@ dependencies = [
 ]
 
 [project.urls]
-Pyxel = "https://github.com/kitao/pyxel"
+Homepage = "https://alepoydes.github.io/alien-evolution-pyport/"
+Repository = "https://github.com/alepoydes/alien-evolution-pyport"
+Issues = "https://github.com/alepoydes/alien-evolution-pyport/issues"
+Changelog = "https://github.com/alepoydes/alien-evolution-pyport/releases"
 
 [project.scripts]
 demoline = "alien_evolution.demoline.run:main"
@@ -32,6 +35,7 @@ include = ["src/alien_evolution/data/**"]
 
 [tool.hatch.build.targets.sdist]
 include = [
+  "LICENSE",
   "src/alien_evolution/data/**",
   "tools/export_skool_blocks.py",
 ]

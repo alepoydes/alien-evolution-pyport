@@ -20,6 +20,12 @@ This repository is a modern **Python/Pyxel** port of the original ZX game. The a
 >
 > This project also relied heavily on [SkoolKit](https://github.com/skoolkid/skoolkit) and [Fuse (the Free Unix Spectrum Emulator)](https://fuse-emulator.sourceforge.net/) for source-level analysis, and on [Pyxel](https://github.com/kitao/pyxel) for implementing the remake. Many thanks to these projects and their maintainers, they made this work substantially easier.
 
+## Rights and Preservation Notice
+
+The original 1987 game *Alien Evolution*, along with its title, game design, audiovisual presentation, characters, and other original expressive elements, remains the property of its original authors and any other applicable rightsholders. This repository licenses only the new Python/Pyxel port code and the accompanying original project documentation under the MIT license.
+
+This project does not claim ownership of the original game and is not presented as a commercial replacement for it. Its purpose is preservation, documentation, reverse engineering, education, long-term maintainability, and research, in line with the project goals described below.
+
 ## Alien Evolution in its 1987 context
 
 To place *Alien Evolution* properly, it helps to remember what the ZX Spectrum market looked like in **1987**. The machine was widespread, cassette distribution was mature, and players had become fluent in the “fake 3D” grammar of **isometric** games, an economical way to suggest depth without any 3D hardware. In that setting, a successful design usually did not come from having *more* mechanics, but from choosing one or two rules that interact in a way the player can feel.
