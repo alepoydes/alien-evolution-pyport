@@ -28,11 +28,10 @@ class _SingleFrameRuntime:
                     epoch_id=0,
                     start_tick=7,
                     duration_ticks=12,
+                    note="A2",
                     waveform="S",
                     effect="N",
-                    freq_hz=440.0,
                     volume=5,
-                    source="stream_music",
                     priority=10,
                 ),
             ),
@@ -92,6 +91,10 @@ class FileIORunnerTests(unittest.TestCase):
         self.assertEqual(
             frame_record["output"]["audio_events"][0]["waveform"],
             "S",
+        )
+        self.assertEqual(
+            frame_record["output"]["audio_events"][0]["note"],
+            "A2",
         )
         self.assertEqual(
             frame_record["output"]["audio_events"][0]["effect"],

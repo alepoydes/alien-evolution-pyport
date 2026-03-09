@@ -17,7 +17,7 @@ from ..zx.runtime import (
     StepOutput,
 )
 
-_FILEIO_FORMAT = "alien-evolution-fileio-v3"
+_FILEIO_FORMAT = "alien-evolution-fileio-v4"
 _HEADLESS_AUDIO_HORIZON_TICKS = 96
 _HEADLESS_AUDIO_LEAD_TICKS = 3
 _HEADLESS_AUDIO_TICK_DEN = 5
@@ -194,11 +194,10 @@ def _audio_to_dict(event: AudioEvent) -> dict[str, object]:
             "epoch_id": event.epoch_id,
             "start_tick": event.start_tick,
             "duration_ticks": event.duration_ticks,
+            "note": event.note,
             "waveform": event.waveform,
             "effect": event.effect,
-            "freq_hz": event.freq_hz,
             "volume": event.volume,
-            "source": event.source,
             "priority": event.priority,
         }
     if isinstance(event, AudioResetEvent):

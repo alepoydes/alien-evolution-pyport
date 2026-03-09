@@ -56,6 +56,32 @@ GAMEPLAY_FRAME_DIVIDER: int = 6
 _AUDIO_TICKS_PER_SECOND: int = 120
 _HOST_FRAMES_PER_SECOND: int = 50
 STREAM_EOF_DRAIN_MARGIN_TICKS: int = 3
+_A2_REFERENCE_HZ: float = 429.89
+_SPLASH_MICROSTEP_TICKS: int = 4
+_SPLASH_MICROSTEP_CLOCK_UNITS: int = int(round((3_500_000.0 * _SPLASH_MICROSTEP_TICKS) / _AUDIO_TICKS_PER_SECOND))
+_PRIORITY_STREAM_MUSIC: int = 10
+_PRIORITY_SPLASH_PRIMARY: int = 20
+_PRIORITY_SPLASH_ENRICH: int = 19
+_PRIORITY_GENERIC: int = 25
+_PRIORITY_ROM_BEEPER: int = 30
+_NOTE_NAMES: tuple[str, ...] = ("C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B")
+
+_SPLASH_MACROCELL_PATTERNS: dict[tuple[int, int], tuple[str, ...]] = {
+    (0xB4, 0x29): ("t1_a", "t1_b", "t1_c", "t1_d"),
+    (0xEC, 0x01): ("t2_hit", "rest", "rest", "rest"),
+    (0xF3, 0xFF): ("t3_white", "t3_white", "t3_white", "t3_white"),
+    (0xEE, 0xFF): ("t3_white", "rest", "t3_white", "rest"),
+}
+
+_SPLASH_TOKEN_VOICES: dict[str, tuple[tuple[str, str, int, int], ...]] = {
+    "t1_a": (("P", "B5", 4, _PRIORITY_SPLASH_PRIMARY), ("P", "B4", 2, _PRIORITY_SPLASH_ENRICH)),
+    "t1_b": (("P", "A5", 4, _PRIORITY_SPLASH_PRIMARY), ("P", "A4", 2, _PRIORITY_SPLASH_ENRICH)),
+    "t1_c": (("P", "G5", 4, _PRIORITY_SPLASH_PRIMARY), ("P", "G4", 2, _PRIORITY_SPLASH_ENRICH)),
+    "t1_d": (("P", "F5", 4, _PRIORITY_SPLASH_PRIMARY), ("P", "F4", 2, _PRIORITY_SPLASH_ENRICH)),
+    "t2_hit": (("N", "G4", 4, _PRIORITY_SPLASH_PRIMARY),),
+    "t3_white": (("N", "A#4", 4, _PRIORITY_SPLASH_PRIMARY), ("N", "B4", 2, _PRIORITY_SPLASH_ENRICH)),
+    "rest": (),
+}
 
 # Stream interpreter throughput budget per host frame. This keeps menu/intro
 # stream progression close to original pacing without tying gameplay loop speed
@@ -99,6 +125,35 @@ FSM_STATE_OVERLAY_POST_FILL_FRAME = "OVERLAY_POST_FILL_FRAME"
 FSM_STATE_CALLBACK_TIMING_FRAME = "CALLBACK_TIMING_FRAME"
 FSM_STATE_CALLBACK_HALT_65_FRAME = "CALLBACK_HALT_65_FRAME"
 FSM_STATE_RUNTIME_FALLBACK_IDLE_FRAME = "RUNTIME_FALLBACK_IDLE_FRAME"
+
+
+def _pyxel_note_from_hz(freq: float) -> str:
+    if freq <= 0:
+        return "R"
+
+    note_idx = int(round(33 + 12.0 * math.log2(float(freq) / _A2_REFERENCE_HZ)))
+    note_idx = max(0, min(59, note_idx))
+    return f"{_NOTE_NAMES[note_idx % 12]}{note_idx // 12}"
+
+
+def _pyxel_noise_note_from_hz(freq: float) -> str:
+    if freq <= 0:
+        return "C0"
+
+    src_hz = max(120.0, float(freq))
+    src_lo = 120.0
+    src_hi = 20_000.0
+    t = (math.log(src_hz) - math.log(src_lo)) / (math.log(src_hi) - math.log(src_lo))
+    t = max(0.0, min(1.0, t))
+    color_hz = 1400.0 + (600.0 * (t**0.6))
+    return _pyxel_note_from_hz(color_hz)
+
+
+def _rom_beeper_note_from_period(period: int) -> str:
+    p = max(1, int(period) & 0xFFFF)
+    half_period_t = 4.0 * (float(p) + 30.125)
+    full_period_t = 2.0 * half_period_t
+    return _pyxel_note_from_hz(3_500_000.0 / full_period_t)
 
 
 def _build_rowbit_key_scan_order() -> tuple[tuple[int, int, str], ...]:
@@ -733,12 +788,13 @@ class AlienEvolutionPort(StatefulManifestRuntime, AlienEvolutionData, ZXSpectrum
                 start_tick = max(int(frame_cursor), safe_start_tick)
         else:
             start_tick = max(0, int(start_tick))
-        self.emit_rom_beeper(
-            period=period,
-            ticks=ticks,
+        self.emit_note_event(
+            note=_rom_beeper_note_from_period(period),
             waveform="S",
-            source="rom_beeper",
             start_tick=start_tick,
+            duration_ticks=duration_ticks,
+            volume=5,
+            priority=_PRIORITY_ROM_BEEPER,
         )
         self._frame_rom_beeper_cursors[emit_epoch] = max(
             int(self._frame_rom_beeper_cursors.get(emit_epoch, 0)),
@@ -780,14 +836,17 @@ class AlienEvolutionPort(StatefulManifestRuntime, AlienEvolutionData, ZXSpectrum
         frame_count = max(1, int(GAMEPLAY_FRAME_DIVIDER))
         period = hl_period & 0xFFFF
         ticks = de_ticks & 0xFFFF
+        note = _rom_beeper_note_from_period(period)
+        duration_ticks = self._rom_beeper_duration_ticks(de_ticks=ticks, hl_period=period)
         for host_frame_idx in range(frame_count):
-            self.emit_rom_beeper(
-                period=period,
-                ticks=ticks,
+            self.emit_note_event(
+                note=note,
                 waveform="S",
                 effect="N",
                 priority=35,
                 start_tick=start_tick + self._audio_ticks_for_host_frames(host_frame_idx),
+                duration_ticks=duration_ticks,
+                volume=5,
             )
 
     @staticmethod
@@ -6238,12 +6297,12 @@ class AlienEvolutionPort(StatefulManifestRuntime, AlienEvolutionData, ZXSpectrum
                 waveform = "S"
                 volume = 4 if slow_present and not slow_is_carrier else 5
             self.emit_note_event(
+                note=_pyxel_note_from_hz(freq_fast),
                 waveform=waveform,
-                freq_hz=freq_fast,
                 start_tick=self._stream_lane_ticks[0],
                 duration_ticks=slot_ticks,
                 volume=volume,
-                source="stream_music",
+                priority=_PRIORITY_STREAM_MUSIC,
             )
         self._stream_lane_ticks[0] += slot_ticks
         if slow_present:
@@ -6254,12 +6313,12 @@ class AlienEvolutionPort(StatefulManifestRuntime, AlienEvolutionData, ZXSpectrum
                 waveform = "S"
                 volume = 4 if fast_present and not fast_is_carrier else 5
             self.emit_note_event(
+                note=_pyxel_note_from_hz(freq_slow),
                 waveform=waveform,
-                freq_hz=freq_slow,
                 start_tick=self._stream_lane_ticks[1],
                 duration_ticks=slot_ticks,
                 volume=volume,
-                source="stream_music",
+                priority=_PRIORITY_STREAM_MUSIC,
             )
         self._stream_lane_ticks[1] += slot_ticks
         return int(total_clock_units)
@@ -6309,10 +6368,32 @@ class AlienEvolutionPort(StatefulManifestRuntime, AlienEvolutionData, ZXSpectrum
 
         return total_clock_units
 
+    def _emit_splash_macrocell(self, pattern: tuple[str, ...]) -> int:
+        self._ensure_stream_lane_slots()
+        total_clock_units = 0
+        for token in pattern:
+            start_tick = int(self._stream_lane_ticks[0])
+            for waveform, note, volume, priority in _SPLASH_TOKEN_VOICES.get(token, ()):
+                self.emit_note_event(
+                    note=note,
+                    waveform=cast(Literal["S", "T", "P", "N"], waveform),
+                    start_tick=start_tick,
+                    duration_ticks=_SPLASH_MICROSTEP_TICKS,
+                    volume=volume,
+                    priority=priority,
+                )
+            self._stream_lane_ticks[0] += _SPLASH_MICROSTEP_TICKS
+            self._stream_lane_ticks[1] += _SPLASH_MICROSTEP_TICKS
+            total_clock_units += _SPLASH_MICROSTEP_CLOCK_UNITS
+        return total_clock_units
+
     # ZX 0xFCD6..0xFCF8
     def special_command_dispatcher(self, A_cmd) -> int:
         d_bits = self.var_stream_cmd_byte_1 & 0xFF
         a_cmd, b_delay, c_delay, e_wait = self.fn_command_parameter_normalizer(A_cmd=self._as_u8(A_cmd))
+        pattern = _SPLASH_MACROCELL_PATTERNS.get((a_cmd & 0xFF, d_bits))
+        if pattern is not None:
+            return self._emit_splash_macrocell(pattern)
         if a_cmd == 0xFF:
             return self.bitstream_pulse_generator(C_repeat=c_delay, D_bits=d_bits)
         if a_cmd == 0xC0:
@@ -6391,12 +6472,12 @@ class AlienEvolutionPort(StatefulManifestRuntime, AlienEvolutionData, ZXSpectrum
             volume = 3
 
         self.emit_note_event(
+            note=_pyxel_noise_note_from_hz(freq_hz),
             waveform="N",
-            freq_hz=freq_hz,
             start_tick=self._stream_lane_ticks[0],
             duration_ticks=slot_ticks,
             volume=volume,
-            source="stream_special",
+            priority=_PRIORITY_SPLASH_PRIMARY,
         )
         self._stream_lane_ticks[0] += slot_ticks
         self._stream_lane_ticks[1] += slot_ticks
@@ -6438,12 +6519,12 @@ class AlienEvolutionPort(StatefulManifestRuntime, AlienEvolutionData, ZXSpectrum
         duration_s = float(waves) / freq
         duration_ticks = self._duration_ticks_from_seconds(duration_s)
         self.emit_note_event(
+            note=_pyxel_note_from_hz(freq),
             waveform="S",
-            freq_hz=freq,
             start_tick=self._stream_lane_ticks[0],
             duration_ticks=duration_ticks,
             volume=5,
-            source="stream_special",
+            priority=_PRIORITY_SPLASH_PRIMARY,
         )
         self._stream_lane_ticks[0] += duration_ticks
         self._interrupts_enabled = False

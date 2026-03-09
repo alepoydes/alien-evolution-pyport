@@ -1202,12 +1202,12 @@ class RuntimeStateRoundtripTests(unittest.TestCase):
         }
         runtime._interrupts_enabled = False
         runtime.emit_note_event(
+            note="A2",
             waveform="S",
-            freq_hz=440.0,
             start_tick=12,
             duration_ticks=15,
             volume=5,
-            source="stream_music",
+            priority=10,
         )
 
         def _raise_forced_abort() -> None:
@@ -1543,12 +1543,12 @@ class RuntimeStateRoundtripTests(unittest.TestCase):
             )
         )
         runtime.emit_note_event(
+            note="A2",
             waveform="S",
-            freq_hz=440.0,
             start_tick=12,
             duration_ticks=15,
             volume=5,
-            source="stream_music",
+            priority=10,
         )
         fill_calls = {"count": 0}
 

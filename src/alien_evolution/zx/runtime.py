@@ -15,19 +15,6 @@ AudioWaveform: TypeAlias = Literal["S", "T", "P", "N"]
 AudioEffect: TypeAlias = Literal["N", "S", "V", "F", "H", "Q"]
 
 
-def _default_audio_priority(source: str) -> int:
-    source_s = str(source or "generic")
-    if source_s == "stream_music":
-        return 10
-    if source_s == "stream_special":
-        return 20
-    if source_s == "generic":
-        return 25
-    if source_s == "rom_beeper":
-        return 30
-    return 25
-
-
 @dataclass(frozen=True, slots=True)
 class AudioClockSnapshot:
     """Backend-provided audio timing snapshot sampled for one `step()`.
@@ -82,11 +69,10 @@ class AudioNoteEvent:
     epoch_id: int
     start_tick: int
     duration_ticks: int
+    note: str
     waveform: AudioWaveform
-    freq_hz: float
     effect: AudioEffect = "N"
     volume: int = 7
-    source: str = "generic"
     priority: int = 25
 
     def __post_init__(self) -> None:
@@ -99,6 +85,9 @@ class AudioNoteEvent:
         duration_ticks = max(1, int(self.duration_ticks))
         if duration_ticks != self.duration_ticks:
             object.__setattr__(self, "duration_ticks", duration_ticks)
+        note_s = str(self.note or "R").upper()
+        if note_s != self.note:
+            object.__setattr__(self, "note", note_s)
         waveform_s = str(self.waveform or "S").upper()
         if waveform_s not in _AUDIO_WAVEFORMS:
             waveform_s = "S"
@@ -109,9 +98,6 @@ class AudioNoteEvent:
             effect_s = "N"
         if effect_s != self.effect:
             object.__setattr__(self, "effect", effect_s)
-        source_s = str(self.source or "generic")
-        if source_s != self.source:
-            object.__setattr__(self, "source", source_s)
         volume = max(0, min(7, int(self.volume)))
         if volume != self.volume:
             object.__setattr__(self, "volume", volume)
@@ -370,14 +356,13 @@ class ZXSpectrumServiceLayer:
     def emit_note_event(
         self,
         *,
+        note: str,
         waveform: AudioWaveform,
         effect: AudioEffect = "N",
-        freq_hz: float,
         start_tick: int,
         duration_ticks: int,
         volume: int,
-        source: str = "generic",
-        priority: int | None = None,
+        priority: int = 25,
         epoch_id: int | None = None,
     ) -> None:
         epoch = self._audio_emit_epoch_id if epoch_id is None else max(0, int(epoch_id))
@@ -385,12 +370,11 @@ class ZXSpectrumServiceLayer:
             epoch_id=epoch,
             start_tick=start_tick,
             duration_ticks=duration_ticks,
+            note=str(note or "R"),
             waveform=waveform,
             effect=effect,
-            freq_hz=float(freq_hz),
             volume=volume,
-            source=source,
-            priority=_default_audio_priority(source) if priority is None else int(priority),
+            priority=int(priority),
         )
         self._audio_events.append(event)
         tail_tick = max(0, int(event.start_tick + event.duration_ticks))
@@ -409,26 +393,24 @@ class ZXSpectrumServiceLayer:
     def emit_audio(
         self,
         *,
+        note: str,
         waveform: AudioWaveform,
         effect: AudioEffect = "N",
-        freq_hz: float,
         duration_s: float,
         volume: int,
         start_tick: int,
-        source: str = "generic",
-        priority: int | None = None,
+        priority: int = 25,
         epoch_id: int | None = None,
     ) -> None:
         epoch = self._audio_emit_epoch_id if epoch_id is None else max(0, int(epoch_id))
         duration_ticks = self._duration_ticks_from_seconds(duration_s)
         self.emit_note_event(
+            note=note,
             waveform=waveform,
             effect=effect,
-            freq_hz=freq_hz,
             start_tick=max(0, int(start_tick)),
             duration_ticks=duration_ticks,
             volume=volume,
-            source=source,
             priority=priority,
             epoch_id=epoch,
         )
@@ -436,25 +418,23 @@ class ZXSpectrumServiceLayer:
     def emit_immediate_sfx(
         self,
         *,
+        note: str,
         waveform: AudioWaveform,
         effect: AudioEffect = "N",
-        freq_hz: float,
         duration_ticks: int,
         volume: int,
         start_tick: int,
-        source: str = "generic",
-        priority: int | None = None,
+        priority: int = 25,
         epoch_id: int | None = None,
     ) -> None:
         epoch = self._audio_emit_epoch_id if epoch_id is None else max(0, int(epoch_id))
         self.emit_note_event(
+            note=note,
             waveform=waveform,
             effect=effect,
-            freq_hz=freq_hz,
             start_tick=max(0, int(start_tick)),
             duration_ticks=duration_ticks,
             volume=volume,
-            source=source,
             priority=priority,
             epoch_id=epoch,
         )
@@ -482,44 +462,12 @@ class ZXSpectrumServiceLayer:
         self._ensure_audio_epoch(next_epoch)
         return next_epoch
 
-    @staticmethod
-    def rom_beeper_freq_hz(period: int) -> float:
+    @classmethod
+    def rom_beeper_duration_ticks(cls, period: int, ticks: int) -> int:
         p = max(1, int(period) & 0xFFFF)
         half_period_t = 4.0 * (float(p) + 30.125)
         full_period_t = 2.0 * half_period_t
-        return 3_500_000.0 / full_period_t
-
-    @classmethod
-    def rom_beeper_duration_ticks(cls, period: int, ticks: int) -> int:
-        freq = cls.rom_beeper_freq_hz(period)
+        freq = 3_500_000.0 / full_period_t
         waves = max(1, int(ticks) & 0xFFFF)
         duration = float(waves) / freq
         return cls._duration_ticks_from_seconds(duration)
-
-    def emit_rom_beeper(
-        self,
-        period: int,
-        ticks: int,
-        waveform: AudioWaveform = "S",
-        effect: AudioEffect = "N",
-        *,
-        volume: int = 5,
-        start_tick: int,
-        source: str = "rom_beeper",
-        priority: int | None = None,
-        epoch_id: int | None = None,
-    ) -> None:
-        freq = self.rom_beeper_freq_hz(period)
-        waves = max(1, int(ticks) & 0xFFFF)
-        duration = float(waves) / freq
-        self.emit_audio(
-            waveform=waveform,
-            effect=effect,
-            freq_hz=freq,
-            duration_s=duration,
-            volume=volume,
-            source=source,
-            priority=priority,
-            start_tick=start_tick,
-            epoch_id=epoch_id,
-        )

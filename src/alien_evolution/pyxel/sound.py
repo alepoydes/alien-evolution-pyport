@@ -8,7 +8,6 @@ from typing import Final
 from ..zx.runtime import AudioClockSnapshot, AudioEvent, AudioNoteEvent, AudioResetEvent
 
 _AUDIO_WAVEFORMS = ("S", "T", "P", "N")
-_A2_REFERENCE_HZ = 429.89
 _PYXEL_SOUND_SPEED_MAX = 255
 _SCHEDULE_HORIZON_TICKS: Final[int] = 96
 _SAFE_START_LEAD_TICKS: Final[int] = 3
@@ -30,11 +29,10 @@ class AudioDebugStats:
 class _ChannelSegment:
     is_rest: bool
     ticks: int
+    note: str
     waveform: str
     effect: str
-    freq_hz: float
     volume: int
-    source: str
     priority: int
 
 
@@ -53,76 +51,19 @@ class _QueuedNote:
     saturation_recorded: bool = False
 
 
-def _note_from_hz(freq: float) -> str:
-    if freq <= 0:
-        return "R"
-
-    note_idx = int(round(33 + 12.0 * math.log2(freq / _A2_REFERENCE_HZ)))
-    if note_idx < 0:
-        note_idx = 0
-    if note_idx > 59:
-        note_idx = 59
-    names = ("C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B")
-    name = names[note_idx % 12]
-    octv = note_idx // 12
-    return f"{name}{octv}"
-
-
-def _noise_note_from_hz(freq: float) -> str:
-    if freq <= 0:
-        return "C0"
-
-    src_hz = max(120.0, float(freq))
-    src_lo = 120.0
-    src_hi = 20_000.0
-    t = (math.log(src_hz) - math.log(src_lo)) / (math.log(src_hi) - math.log(src_lo))
-    if t < 0.0:
-        t = 0.0
-    if t > 1.0:
-        t = 1.0
-    color_hz = 1400.0 + (600.0 * (t**0.6))
-    return _note_from_hz(color_hz)
-
-
-def _stream_special_noise_note_from_hz(freq: float) -> str:
-    if freq <= 0:
-        return "F4"
-
-    src_lo = 2500.0
-    src_hi = 18_000.0
-    src_hz = max(src_lo, min(src_hi, float(freq)))
-    t = (math.log(src_hz) - math.log(src_lo)) / (math.log(src_hi) - math.log(src_lo))
-    if t < 0.0:
-        t = 0.0
-    if t > 1.0:
-        t = 1.0
-
-    bins = ("F4", "F#4", "G4", "G#4", "A4", "A#4", "B4")
-    idx = int(round((len(bins) - 1) * (t**0.7)))
-    return bins[idx]
-
-
 def _normalized_note_event(event: AudioNoteEvent) -> AudioNoteEvent:
     waveform = str(event.waveform or "S").upper()
     if waveform not in _AUDIO_WAVEFORMS:
         waveform = "S"
 
-    freq = float(event.freq_hz)
-    if freq < 20.0:
-        freq = 20.0
-    freq_max = 20_000.0 if waveform == "N" else 5000.0
-    if freq > freq_max:
-        freq = freq_max
-
     return AudioNoteEvent(
         epoch_id=event.epoch_id,
         start_tick=event.start_tick,
         duration_ticks=event.duration_ticks,
+        note=str(event.note or "R").upper(),
         waveform=waveform,
         effect=str(event.effect or "N").upper(),
-        freq_hz=freq,
         volume=max(0, min(7, int(event.volume))),
-        source=str(event.source or "generic"),
         priority=int(event.priority),
     )
 
@@ -137,11 +78,7 @@ def _sound_set_from_segment(slot: int, segment: _ChannelSegment) -> None:
         volumes = "0"
         effects = "N"
     else:
-        if segment.waveform == "N":
-            note = _noise_note_from_hz(segment.freq_hz)
-        else:
-            note = _note_from_hz(segment.freq_hz)
-        notes = note
+        notes = str(segment.note or "R").upper()
         tones = segment.waveform if segment.waveform in _AUDIO_WAVEFORMS else "S"
         volumes = str(segment.volume)
         effects = str(segment.effect or "N").upper()
@@ -156,7 +93,7 @@ def _sound_set_from_segment(slot: int, segment: _ChannelSegment) -> None:
 
 
 def beep(
-    freq_hz: float = 440.0,
+    note: str = "A2",
     duration_s: float = 0.08,
     *,
     waveform: str = "S",
@@ -169,11 +106,10 @@ def beep(
     segment = _ChannelSegment(
         is_rest=False,
         ticks=ticks,
+        note=str(note or "R").upper(),
         waveform=str(waveform or "S").upper(),
         effect="N",
-        freq_hz=float(freq_hz),
         volume=volume,
-        source="generic",
         priority=25,
     )
     _sound_set_from_segment(0, segment)
@@ -321,8 +257,6 @@ class PyxelAudioPlayer:
         self._epoch_accounted_ticks[epoch_id] = end_tick
 
     def _advance_epoch_if_needed(self, now_s: float) -> None:
-        import pyxel
-
         while True:
             reset = self._epoch_reset_events.get(self._active_epoch_id)
             if reset is None:
@@ -332,6 +266,8 @@ class PyxelAudioPlayer:
             if now_s + 1e-9 < cut_time_s:
                 return
             self._account_saturation_until(epoch_id=self._active_epoch_id, until_tick=cut_tick)
+            import pyxel
+
             pyxel.stop()
             self._active_epoch_id = int(reset.next_epoch_id)
             self._epoch_origin_time_s = cut_time_s
@@ -457,11 +393,10 @@ class PyxelAudioPlayer:
                     _ChannelSegment(
                         is_rest=True,
                         ticks=run_ticks,
+                        note="R",
                         waveform="N",
                         effect="N",
-                        freq_hz=20.0,
                         volume=0,
-                        source="rest",
                         priority=-1,
                     )
                 )
@@ -474,11 +409,10 @@ class PyxelAudioPlayer:
                     _ChannelSegment(
                         is_rest=False,
                         ticks=run_ticks,
+                        note=note.event.note,
                         waveform=note.event.waveform,
                         effect=note.event.effect,
-                        freq_hz=note.event.freq_hz,
                         volume=note.event.volume,
-                        source=note.event.source,
                         priority=note.event.priority,
                     )
                 )
@@ -514,11 +448,10 @@ class PyxelAudioPlayer:
                     _ChannelSegment(
                         is_rest=segment.is_rest,
                         ticks=ticks - elapsed,
+                        note=segment.note,
                         waveform=segment.waveform,
                         effect=segment.effect,
-                        freq_hz=segment.freq_hz,
                         volume=segment.volume,
-                        source=segment.source,
                         priority=segment.priority,
                     )
                 )
@@ -543,11 +476,10 @@ class PyxelAudioPlayer:
                     _ChannelSegment(
                         is_rest=segment.is_rest,
                         ticks=part_ticks,
+                        note=segment.note,
                         waveform=segment.waveform,
                         effect=segment.effect,
-                        freq_hz=segment.freq_hz,
                         volume=segment.volume,
-                        source=segment.source,
                         priority=segment.priority,
                     ),
                 )
