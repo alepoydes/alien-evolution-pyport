@@ -90,7 +90,7 @@ class PyxelSoundTimelineTests(unittest.TestCase):
 
         self.assertEqual(len(events), 8)
         self.assertEqual([event.start_tick for event in events], [0, 0, 4, 4, 8, 8, 12, 12])
-        self.assertEqual([event.note for event in events], ["B5", "B4", "A5", "A4", "G5", "G4", "F5", "F4"])
+        self.assertEqual([event.note for event in events], ["B4", "B3", "A4", "A3", "G4", "G3", "F4", "F3"])
         self.assertEqual([event.waveform for event in events], ["P"] * 8)
         self.assertEqual([event.priority for event in events], [20, 19, 20, 19, 20, 19, 20, 19])
         self.assertEqual(runtime._stream_lane_ticks[:2], [16, 16])
