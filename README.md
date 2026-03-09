@@ -94,7 +94,7 @@ Cheat commands are disabled in the web build.
 
 ## Project Documents
 
-- [README.md](README.md) is the main overview: historical context, web play link, and quick start.
+- [README.md](https://github.com/alepoydes/alien-evolution-pyport/blob/main/README.md) is the main overview: historical context, web play link, and quick start.
 - [GAME_INFO.md](GAME_INFO.md) explains the game as a player-facing system: goals, controls, enemy evolution, weapon roles, and level flow.
 - [RESEARCH.md](RESEARCH.md) captures research on the original ZX game: runtime behavior, data models, decoded code families, and Skool-based reverse-engineering materials.
 - [PORTING_GUIDE.md](PORTING_GUIDE.md) contains the porting and runtime infrastructure: shared contracts, module layout, file I/O, FMF/RZX pipelines, and reproducible execution workflow.
