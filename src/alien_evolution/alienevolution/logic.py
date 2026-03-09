@@ -74,10 +74,10 @@ _SPLASH_MACROCELL_PATTERNS: dict[tuple[int, int], tuple[str, ...]] = {
 }
 
 _SPLASH_TOKEN_VOICES: dict[str, tuple[tuple[str, str, int, int], ...]] = {
-    "t1_a": (("P", "A0", 5, _PRIORITY_SPLASH_ENRICH),("T", "A1", 3, _PRIORITY_SPLASH_ENRICH)),
-    "t1_b": (("P", "G#0", 3, _PRIORITY_SPLASH_ENRICH),("T", "G#1", 5, _PRIORITY_SPLASH_ENRICH)),
-    "t1_c": (("P", "G0", 5, _PRIORITY_SPLASH_ENRICH),("T", "G1", 3, _PRIORITY_SPLASH_ENRICH)),
-    "t1_d": (("P", "G0", 3, _PRIORITY_SPLASH_ENRICH),("T", "G1", 5, _PRIORITY_SPLASH_ENRICH)),
+    "t1_a": (("P", "E1", 5, _PRIORITY_SPLASH_ENRICH),("S", "B1", 3, _PRIORITY_SPLASH_ENRICH)),
+    "t1_b": (("P", "D#1", 5, _PRIORITY_SPLASH_ENRICH),("S", "A#1", 3, _PRIORITY_SPLASH_ENRICH)),
+    "t1_c": (("P", "D1", 5, _PRIORITY_SPLASH_ENRICH),("S", "A1", 3, _PRIORITY_SPLASH_ENRICH)),
+    "t1_d": (("P", "D1", 5, _PRIORITY_SPLASH_ENRICH),("S", "A1", 3, _PRIORITY_SPLASH_ENRICH)),
     "t2_hit": (("N", "A3", 4, _PRIORITY_SPLASH_PRIMARY),),
     "t3_white": (("N", "B4", 2, _PRIORITY_SPLASH_ENRICH),),
     "rest": (),
