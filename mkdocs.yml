@@ -1,0 +1,18 @@
+site_name: Alien Evolution
+site_description: Pyxel port of the 1987 ZX Spectrum game Alien Evolution
+site_url: https://alepoydes.github.io/alien-evolution-pyport/
+repo_url: https://github.com/alepoydes/alien-evolution-pyport
+docs_dir: !ENV [PAGES_DOCS_DIR, .pages-site-src]
+site_dir: site
+theme:
+  name: mkdocs
+nav:
+  - Home: index.md
+  - Project Overview: project-overview.md
+  - Game Info: GAME_INFO.md
+  - Research: RESEARCH.md
+  - Porting Guide: PORTING_GUIDE.md
+  - CLI Utilities: CLI_UTILITIES.md
+  - AI Guide: AI.md
+  - Development: DEVELOPMENT.md
+  - Open Issues: OPEN_ISSUES.md
