@@ -8,7 +8,6 @@ theme:
   name: mkdocs
 nav:
   - Home: index.md
-  - Project Overview: project-overview.md
   - Game Info: GAME_INFO.md
   - Research: RESEARCH.md
   - Porting Guide: PORTING_GUIDE.md

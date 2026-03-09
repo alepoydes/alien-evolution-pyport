@@ -8,7 +8,6 @@ This repository is a modern **Python/Pyxel** port of the original ZX game. The a
 
 - [Play Alien Evolution in your browser](https://alepoydes.github.io/alien-evolution-pyport/play/) (`W/A/S/D` move, `Space` fire, `E` switch weapon). This GitHub Pages build is generated from CI to avoid stale `Pyxel` launcher caches. Known issues in the web version: occasional audio stuttering and sticky buttons.
 - [Browse the project site and docs](https://alepoydes.github.io/alien-evolution-pyport/)
-- Fallback launcher link: <https://kitao.github.io/pyxel/wasm/launcher/?play=alepoydes.alien-evolution-pyport.alien-evolution>
 
 <table>
   <tr>
@@ -93,15 +92,13 @@ Quality-of-life hotkeys:
 
 Cheat commands are disabled in the web build.
 
-## CLI and Automation Docs
+## Project Documents
 
-- For headless CLI usage, JSONL telemetry, FMF recording/playback, RZX input, state I/O, and reusable ZX -> Python/Pyxel porting infrastructure, see [PORTING_GUIDE.md](PORTING_GUIDE.md).
-- For bot development and ML-oriented workflows, see [AI.md](AI.md).
-
-## Documentation Guide
-
+- [README.md](README.md) is the main overview: historical context, web play link, and quick start.
 - [GAME_INFO.md](GAME_INFO.md) explains the game as a player-facing system: goals, controls, enemy evolution, weapon roles, and level flow.
 - [RESEARCH.md](RESEARCH.md) captures research on the original ZX game: runtime behavior, data models, decoded code families, and Skool-based reverse-engineering materials.
-- [PORTING_GUIDE.md](PORTING_GUIDE.md) contains implementation infrastructure: shared runtime contracts, module layout, CLI/file I/O tools, FMF/RZX pipelines, and reproducible execution workflow.
+- [PORTING_GUIDE.md](PORTING_GUIDE.md) contains the porting and runtime infrastructure: shared contracts, module layout, file I/O, FMF/RZX pipelines, and reproducible execution workflow.
+- [CLI_UTILITIES.md](CLI_UTILITIES.md) documents the command-line tools and practical invocation patterns.
 - [AI.md](AI.md) focuses on bot and ML integration: control interfaces, telemetry semantics, and practical automation strategy.
-- [OPEN_ISSUES.md](OPEN_ISSUES.md) tracks open fidelity gaps and unresolved technical discrepancies.
+- [DEVELOPMENT.md](DEVELOPMENT.md) covers local development, testing, packaging, and GitHub Pages deployment.
+- [OPEN_ISSUES.md](OPEN_ISSUES.md) points to the GitHub issue tracker during the transition away from repository-local issue lists.
