@@ -1,3 +1,9 @@
+"""Preservation-port data blocks.
+
+This module embeds original-game-derived data used by the fidelity-first port.
+It is intentionally excluded from the repository MIT grant; see RIGHTS.md.
+"""
+
 from __future__ import annotations
 
 from dataclasses import dataclass

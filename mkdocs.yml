@@ -13,5 +13,6 @@ nav:
   - Porting Guide: PORTING_GUIDE.md
   - CLI Utilities: CLI_UTILITIES.md
   - AI Guide: AI.md
+  - Rights: RIGHTS.md
   - Development: DEVELOPMENT.md
   - Open Issues: OPEN_ISSUES.md

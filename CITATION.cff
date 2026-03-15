@@ -1,0 +1,11 @@
+cff-version: 1.2.0
+message: "If you use this preservation port or its reverse-engineering notes, please cite this repository."
+title: "Alien Evolution (ZX Spectrum) -> Modern Python Port"
+type: software
+authors:
+  - family-names: Lobanov
+    given-names: Igor
+version: 0.1.0
+repository-code: "https://github.com/alepoydes/alien-evolution-pyport"
+url: "https://alepoydes.github.io/alien-evolution-pyport/"
+abstract: "Fidelity-first Python/Pyxel preservation port of the 1987 ZX Spectrum game Alien Evolution, with reverse-engineering notes and reproducible runtime tooling."

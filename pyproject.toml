@@ -7,7 +7,7 @@ name = "alien-evolution-pyport"
 version = "0.1.0"
 description = "Fidelity-first Python/Pyxel port of the 1987 ZX Spectrum game Alien Evolution"
 authors = [{ name = "Igor Lobanov" }]
-license = { file = "LICENSE" }
+license-files = ["LICENSE", "RIGHTS.md"]
 readme = "README.md"
 requires-python = ">=3.10"
 keywords = ["zx-spectrum", "pyxel", "retro", "port"]
@@ -31,11 +31,3 @@ fmf-player = "alien_evolution.pyxel.fmfplayer:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/alien_evolution"]
-include = ["src/alien_evolution/data/**"]
-
-[tool.hatch.build.targets.sdist]
-include = [
-  "LICENSE",
-  "src/alien_evolution/data/**",
-  "tools/export_skool_blocks.py",
-]

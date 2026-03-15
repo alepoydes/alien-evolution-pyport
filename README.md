@@ -2,7 +2,7 @@
 
 `Alien Evolution` is a **1987** isometric action game for the **Sinclair ZX Spectrum** (48K and 128K). You play as **CYBORG G4**, an android deployed to the surface after a nuclear catastrophe to contain an alien outbreak. The game looks like a compact arcade arena, but the pressure comes from the aliens’ life cycle: if you leave them alive, they **evolve through several stages**, becoming faster and more aggressive, and eventually **lay eggs**, increasing the population. So the moment-to-moment problem is not only aiming; it is deciding what must be eliminated now in order not to fight twice as much later.
 
-This repository is a modern **Python/Pyxel** port of the original ZX game. The aim is fidelity first: behaviour, timing, and presentation that match the 8-bit version as closely as we can justify, while also making the program easier to run, inspect, and experiment with (including headless stepping, deterministic replay from recorded inputs, and state snapshots for reproducible resets).
+This repository is a modern **Python/Pyxel** preservation port of the original ZX game. The aim is fidelity first: behaviour, timing, and presentation that match the 8-bit version as closely as we can justify, while also making the program easier to run, inspect, and experiment with (including headless stepping, deterministic replay from recorded inputs, and state snapshots for reproducible resets).
 
 ## Play Online
 
@@ -18,13 +18,15 @@ This repository is a modern **Python/Pyxel** port of the original ZX game. The a
 
 > Disclaimer: reverse-engineering games like this usually takes significant time. This port was built as a weekend project, which was possible thanks to ChatGPT-assisted analysis and implementation.
 >
-> This project also relied heavily on [SkoolKit](https://github.com/skoolkid/skoolkit) and [Fuse (the Free Unix Spectrum Emulator)](https://fuse-emulator.sourceforge.net/) for source-level analysis, and on [Pyxel](https://github.com/kitao/pyxel) for implementing the remake. Many thanks to these projects and their maintainers, they made this work substantially easier.
+> This project also relied heavily on [SkoolKit](https://github.com/skoolkid/skoolkit) and [Fuse (the Free Unix Spectrum Emulator)](https://fuse-emulator.sourceforge.net/) for source-level analysis, and on [Pyxel](https://github.com/kitao/pyxel) for implementing this preservation port. Many thanks to these projects and their maintainers, they made this work substantially easier.
 
 ## Rights and Preservation Notice
 
-The original 1987 game *Alien Evolution*, along with its title, game design, audiovisual presentation, characters, and other original expressive elements, remains the property of its original authors and any other applicable rightsholders. This repository licenses only the new Python/Pyxel port code and the accompanying original project documentation under the MIT license.
+This repository is a mixed-rights preservation project, not a uniformly MIT-licensed game package. The original 1987 game *Alien Evolution*, along with its title, audiovisual expression, gameplay assets, characters, and other original expressive elements, remains the property of its original authors and any other applicable rightsholders.
 
-This project does not claim ownership of the original game and is not presented as a commercial replacement for it. Its purpose is preservation, documentation, reverse engineering, education, long-term maintainability, and research, in line with the project goals described below.
+The repository [LICENSE](LICENSE) applies to Igor Lobanov-authored code and documentation except for explicitly excluded paths. Original-game-derived material currently excluded from the MIT grant includes `src/alien_evolution/alienevolution/blocks.py`, `figs/`, `recordings/`, and `skool/`. The authoritative rights boundary is documented in [RIGHTS.md](RIGHTS.md).
+
+This project does not claim ownership of the original game and is not presented as a commercial replacement for it. Its purpose is preservation, documentation, reverse engineering, education, long-term maintainability, and research. The Python package remains installable, but the repository and source distribution are intentionally mixed-rights.
 
 ## Alien Evolution in its 1987 context
 
@@ -51,7 +53,7 @@ Contemporary magazine coverage treated *Alien Evolution* as a competent and slig
 
 Its longer-term legacy is modest but real. Part of it is cultural: the game is a compact example of how 8‑bit designers could generate tension from a few interacting rules. And part of it is methodological: the original Spectrum program is small enough to study in detail, which makes it a good specimen for reverse engineering and “software archaeology”; you can actually connect low-level implementation choices to player-facing behaviour.
 
-This port continues that afterlife by turning *Alien Evolution* into an inspectable, scriptable modern program, while keeping proprietary game binaries out of the repository and documenting the evidence trail used to understand the original behaviour.
+This port continues that afterlife by turning *Alien Evolution* into an inspectable, scriptable modern program while documenting the evidence trail used to understand the original behaviour and keeping the repository's licensing boundary explicit.
 
 **Historical references (for primary context):**
 - World of Spectrum entry (release data, credits, archive artifacts): https://worldofspectrum.org/archive/software/games/alien-evolution-gremlin-graphics-software-ltd
@@ -101,6 +103,8 @@ Cheat commands are disabled in the web build.
 ## Project Documents
 
 - [README.md](https://github.com/alepoydes/alien-evolution-pyport/blob/main/README.md) is the main overview: historical context, web play link, and quick start.
+- [RIGHTS.md](RIGHTS.md) is the authoritative statement of the repository's mixed-rights licensing boundary.
+- [CITATION.cff](CITATION.cff) provides citation metadata for research and preservation references.
 - [GAME_INFO.md](GAME_INFO.md) explains the game as a player-facing system: goals, controls, enemy evolution, weapon roles, and level flow.
 - [RESEARCH.md](RESEARCH.md) captures research on the original ZX game: runtime behavior, data models, decoded code families, and Skool-based reverse-engineering materials.
 - [PORTING_GUIDE.md](PORTING_GUIDE.md) contains the porting and runtime infrastructure: shared contracts, module layout, file I/O, FMF/RZX pipelines, and reproducible execution workflow.
