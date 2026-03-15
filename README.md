@@ -114,4 +114,3 @@ Cheat commands are disabled in the web build.
 - [CLI_UTILITIES.md](CLI_UTILITIES.md) documents the command-line tools and practical invocation patterns.
 - [AI.md](AI.md) focuses on bot and ML integration: control interfaces, telemetry semantics, and practical automation strategy.
 - [DEVELOPMENT.md](DEVELOPMENT.md) covers local development, testing, packaging, and GitHub Pages deployment.
-- [OPEN_ISSUES.md](OPEN_ISSUES.md) points to the GitHub issue tracker during the transition away from repository-local issue lists.
