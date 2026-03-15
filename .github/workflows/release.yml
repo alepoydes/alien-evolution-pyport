@@ -1,0 +1,74 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v5
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v7
+
+      - name: Install project dependencies
+        run: uv sync --frozen
+
+      - name: Derive release metadata
+        id: meta
+        env:
+          REF_NAME: ${{ github.ref_name }}
+        run: |
+          echo "tag=${REF_NAME}" >> "${GITHUB_OUTPUT}"
+          echo "asset_prefix=alien-evolution-${REF_NAME}" >> "${GITHUB_OUTPUT}"
+
+      - name: Build playable artifacts
+        run: |
+          mkdir -p dist/release
+          ./scripts/build_pyxapp.sh "${{ steps.meta.outputs.asset_prefix }}" dist/release
+
+      - name: Build static site snapshot
+        run: |
+          ./scripts/build_pages_site.sh dist/site
+          tar -C dist/site -czf "dist/release/${{ steps.meta.outputs.asset_prefix }}-site.tar.gz" .
+
+      - name: Publish GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.meta.outputs.tag }}
+          ASSET_PREFIX: ${{ steps.meta.outputs.asset_prefix }}
+        run: |
+          if gh release view "${TAG}" >/dev/null 2>&1; then
+            gh release upload "${TAG}" \
+              "dist/release/${ASSET_PREFIX}.html" \
+              "dist/release/${ASSET_PREFIX}.pyxapp" \
+              "dist/release/${ASSET_PREFIX}-site.tar.gz" \
+              --clobber
+          else
+            gh release create "${TAG}" \
+              "dist/release/${ASSET_PREFIX}.html" \
+              "dist/release/${ASSET_PREFIX}.pyxapp" \
+              "dist/release/${ASSET_PREFIX}-site.tar.gz" \
+              --generate-notes \
+              --title "${TAG}"
+          fi

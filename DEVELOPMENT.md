@@ -89,6 +89,7 @@ Workflow files live in `.github/workflows/`:
 
 - `ci.yml` runs the test suite on pushes to `main`, pull requests, and manual dispatches.
 - `pages.yml` builds and deploys the Pages artifact.
+- `release.yml` builds versioned GitHub Release assets when a `v*` tag is pushed.
 
 To enable deployment in GitHub:
 
@@ -97,6 +98,28 @@ To enable deployment in GitHub:
 3. Push to `main` or run the workflow manually from the `Actions` tab.
 
 This keeps generated web build artifacts out of the repository history while still publishing them on Pages.
+
+## Release Model
+
+This repository uses two parallel distribution channels:
+
+- GitHub Pages is the rolling public build from the current `main` branch.
+- GitHub Releases are immutable tagged snapshots intended for citation, regression triage, and preservation.
+
+When `release.yml` runs for a tag such as `v0.1.0`, it publishes:
+
+- a standalone Pyxel web player HTML file;
+- the matching `.pyxapp` package;
+- a tarball snapshot of the generated static site.
+
+GitHub automatically adds the tagged source archives (`zip` and `tar.gz`) to the release page as well.
+
+Suggested release flow:
+
+1. Ensure `pyproject.toml` version and release tag agree.
+2. Run `uv run --with pytest pytest tests -q`.
+3. Create and push a tag like `v0.1.0`.
+4. Let GitHub Actions build and attach the release artifacts.
 
 ## Development and contribution rules (placeholder)
 

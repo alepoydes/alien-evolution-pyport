@@ -5,7 +5,7 @@
 
 A fidelity-first Python/Pyxel preservation port of the 1987 ZX Spectrum game, designed as an inspectable and reproducible research artifact.
 
-[Play in browser](https://alepoydes.github.io/alien-evolution-pyport/play/) | [Docs](https://alepoydes.github.io/alien-evolution-pyport/)
+[Play in browser](https://alepoydes.github.io/alien-evolution-pyport/play/) | [Docs](https://alepoydes.github.io/alien-evolution-pyport/) | [Releases](https://github.com/alepoydes/alien-evolution-pyport/releases)
 
 - Preservation-first port with close behavioral correspondence to the original game
 - Inspectable runtime with deterministic replay, save/load, and headless stepping
