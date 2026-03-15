@@ -1,5 +1,8 @@
 # Alien Evolution
 
+[![CI](https://github.com/alepoydes/alien-evolution-pyport/actions/workflows/ci.yml/badge.svg)](https://github.com/alepoydes/alien-evolution-pyport/actions/workflows/ci.yml)
+[![Pages](https://github.com/alepoydes/alien-evolution-pyport/actions/workflows/pages.yml/badge.svg)](https://github.com/alepoydes/alien-evolution-pyport/actions/workflows/pages.yml)
+
 A fidelity-first Python/Pyxel preservation port of the 1987 ZX Spectrum game, designed as an inspectable and reproducible research artifact.
 
 [Play in browser](https://alepoydes.github.io/alien-evolution-pyport/play/) | [Docs](https://alepoydes.github.io/alien-evolution-pyport/)

@@ -85,7 +85,10 @@ Expected outputs:
 
 ## Enable GitHub Pages deployment
 
-The workflow file is `.github/workflows/pages.yml`.
+Workflow files live in `.github/workflows/`:
+
+- `ci.yml` runs the test suite on pushes to `main`, pull requests, and manual dispatches.
+- `pages.yml` builds and deploys the Pages artifact.
 
 To enable deployment in GitHub:
 
