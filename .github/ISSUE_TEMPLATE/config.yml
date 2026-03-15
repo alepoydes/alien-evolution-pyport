@@ -1,0 +1,11 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Questions and broader discussion
+    url: https://github.com/alepoydes/alien-evolution-pyport/discussions
+    about: Use Discussions for questions, preservation methodology, tooling ideas, and broader project direction.
+  - name: Project documentation
+    url: https://alepoydes.github.io/alien-evolution-pyport/
+    about: Read the project overview, research notes, porting guide, and development documentation.
+  - name: Rights and licensing boundary
+    url: https://github.com/alepoydes/alien-evolution-pyport/blob/main/RIGHTS.md
+    about: Review the repository's mixed-rights boundary before opening licensing or reuse questions.
