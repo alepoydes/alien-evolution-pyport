@@ -79,7 +79,7 @@ class PyxelSoundTimelineTests(unittest.TestCase):
         self.assertEqual(call["volumes"], "3")
         self.assertEqual(call["speed"], 4)
 
-    def test_special_command_dispatcher_expands_t1_macrocell_into_ranked_voices(self) -> None:
+    def test_special_command_dispatcher_expands_t1_macrocell_into_current_paired_voices(self) -> None:
         runtime = AlienEvolutionPort()
         runtime.begin_frame(FrameInput())
         runtime._reset_stream_audio_timing_state()
@@ -89,13 +89,22 @@ class PyxelSoundTimelineTests(unittest.TestCase):
         events = runtime.end_frame().audio_events
 
         self.assertEqual(len(events), 8)
-        self.assertEqual([event.start_tick for event in events], [0, 0, 4, 4, 8, 8, 12, 12])
-        self.assertEqual([event.note for event in events], ["B4", "B3", "A4", "A3", "G4", "G3", "F4", "F3"])
-        self.assertEqual([event.waveform for event in events], ["P"] * 8)
-        self.assertEqual([event.priority for event in events], [20, 19, 20, 19, 20, 19, 20, 19])
+        self.assertEqual(
+            [(event.start_tick, event.note, event.waveform, event.priority) for event in events],
+            [
+                (0, "E1", "P", 19),
+                (0, "B1", "S", 19),
+                (4, "D#1", "P", 19),
+                (4, "A#1", "S", 19),
+                (8, "D1", "P", 19),
+                (8, "A1", "S", 19),
+                (12, "D1", "P", 19),
+                (12, "A1", "S", 19),
+            ],
+        )
         self.assertEqual(runtime._stream_lane_ticks[:2], [16, 16])
 
-    def test_special_command_dispatcher_expands_t2_macrocell_with_trailing_silence(self) -> None:
+    def test_special_command_dispatcher_expands_t2_macrocell_with_current_noise_hit(self) -> None:
         runtime = AlienEvolutionPort()
         runtime.begin_frame(FrameInput())
         runtime._reset_stream_audio_timing_state()
@@ -107,11 +116,12 @@ class PyxelSoundTimelineTests(unittest.TestCase):
         self.assertEqual(len(events), 1)
         self.assertEqual(events[0].start_tick, 0)
         self.assertEqual(events[0].duration_ticks, 4)
-        self.assertEqual(events[0].note, "G4")
+        self.assertEqual(events[0].note, "A3")
         self.assertEqual(events[0].waveform, "N")
+        self.assertEqual(events[0].priority, 20)
         self.assertEqual(runtime._stream_lane_ticks[:2], [16, 16])
 
-    def test_special_command_dispatcher_expands_t3late_macrocell_on_all_steps(self) -> None:
+    def test_special_command_dispatcher_expands_t3late_macrocell_on_all_steps_with_single_noise_voice(self) -> None:
         runtime = AlienEvolutionPort()
         runtime.begin_frame(FrameInput())
         runtime._reset_stream_audio_timing_state()
@@ -120,12 +130,13 @@ class PyxelSoundTimelineTests(unittest.TestCase):
         runtime.special_command_dispatcher(0xF3)
         events = runtime.end_frame().audio_events
 
-        self.assertEqual(len(events), 8)
-        self.assertEqual([event.start_tick for event in events], [0, 0, 4, 4, 8, 8, 12, 12])
-        self.assertEqual([event.note for event in events], ["A#4", "B4", "A#4", "B4", "A#4", "B4", "A#4", "B4"])
+        self.assertEqual(len(events), 4)
+        self.assertEqual([event.start_tick for event in events], [0, 4, 8, 12])
+        self.assertEqual([event.note for event in events], ["B4", "B4", "B4", "B4"])
         self.assertTrue(all(event.waveform == "N" for event in events))
+        self.assertTrue(all(event.priority == 19 for event in events))
 
-    def test_special_command_dispatcher_expands_t3early_macrocell_every_other_step(self) -> None:
+    def test_special_command_dispatcher_expands_t3early_macrocell_every_other_step_with_single_noise_voice(self) -> None:
         runtime = AlienEvolutionPort()
         runtime.begin_frame(FrameInput())
         runtime._reset_stream_audio_timing_state()
@@ -134,9 +145,11 @@ class PyxelSoundTimelineTests(unittest.TestCase):
         runtime.special_command_dispatcher(0xEE)
         events = runtime.end_frame().audio_events
 
-        self.assertEqual(len(events), 4)
-        self.assertEqual([event.start_tick for event in events], [0, 0, 8, 8])
-        self.assertEqual([event.note for event in events], ["A#4", "B4", "A#4", "B4"])
+        self.assertEqual(len(events), 2)
+        self.assertEqual([event.start_tick for event in events], [0, 8])
+        self.assertEqual([event.note for event in events], ["B4", "B4"])
+        self.assertTrue(all(event.waveform == "N" for event in events))
+        self.assertTrue(all(event.priority == 19 for event in events))
 
     def test_schedule_reset_switches_default_emit_epoch(self) -> None:
         runtime = AlienEvolutionPort()
