@@ -1,24 +1,27 @@
-# Alien Evolution (ZX Spectrum) -> Modern Python Port
+# Alien Evolution
+
+A fidelity-first Python/Pyxel preservation port of the 1987 ZX Spectrum game, designed as an inspectable and reproducible research artifact.
+
+[Play in browser](https://alepoydes.github.io/alien-evolution-pyport/play/) | [Docs](https://alepoydes.github.io/alien-evolution-pyport/)
+
+- Preservation-first port with close behavioral correspondence to the original game
+- Inspectable runtime with deterministic replay, save/load, and headless stepping
+- Mixed-rights repository; licensing boundary documented in [RIGHTS.md](RIGHTS.md)
+
+![Alien Evolution gameplay screenshot](figs/gameplay-level-1.png)
+
+> Status: active preservation port
+> Audience: reverse engineering, preservation, and research
+> Builds: browser build and installable Python package available
+> Rights: mixed-rights repository; see [RIGHTS.md](RIGHTS.md)
+
+## Overview
 
 `Alien Evolution` is a **1987** isometric action game for the **Sinclair ZX Spectrum** (48K and 128K). You play as **CYBORG G4**, an android deployed to the surface after a nuclear catastrophe to contain an alien outbreak. The game looks like a compact arcade arena, but the pressure comes from the aliens’ life cycle: if you leave them alive, they **evolve through several stages**, becoming faster and more aggressive, and eventually **lay eggs**, increasing the population. So the moment-to-moment problem is not only aiming; it is deciding what must be eliminated now in order not to fight twice as much later.
 
 This repository is a modern **Python/Pyxel** preservation port of the original ZX game. The aim is fidelity first: behaviour, timing, and presentation that match the 8-bit version as closely as we can justify, while also making the program easier to run, inspect, and experiment with (including headless stepping, deterministic replay from recorded inputs, and state snapshots for reproducible resets).
 
-## Play Online
-
-- [Play Alien Evolution in your browser](https://alepoydes.github.io/alien-evolution-pyport/play/) (`W/A/S/D` move, `Space` fire, `E` switch weapon). This GitHub Pages build is generated from CI to avoid stale `Pyxel` launcher caches. Known issues in the web version: occasional audio stuttering and sticky buttons.
-- [Browse the project site and docs](https://alepoydes.github.io/alien-evolution-pyport/)
-
-<table>
-  <tr>
-    <td><img src="figs/gameplay-level-1.png" alt="Alien Evolution gameplay level 1" width="420"></td>
-    <td><img src="figs/gameplay-level-2.png" alt="Alien Evolution gameplay level 2" width="420"></td>
-  </tr>
-</table>
-
-> Disclaimer: reverse-engineering games like this usually takes significant time. This port was built as a weekend project, which was possible thanks to ChatGPT-assisted analysis and implementation.
->
-> This project also relied heavily on [SkoolKit](https://github.com/skoolkid/skoolkit) and [Fuse (the Free Unix Spectrum Emulator)](https://fuse-emulator.sourceforge.net/) for source-level analysis, and on [Pyxel](https://github.com/kitao/pyxel) for implementing this preservation port. Many thanks to these projects and their maintainers, they made this work substantially easier.
+This project also relied heavily on [SkoolKit](https://github.com/skoolkid/skoolkit) and [Fuse (the Free Unix Spectrum Emulator)](https://fuse-emulator.sourceforge.net/) for source-level analysis, and on [Pyxel](https://github.com/kitao/pyxel) for implementing this preservation port. Many thanks to these projects and their maintainers, they made this work substantially easier.
 
 ## Rights and Preservation Notice
 
